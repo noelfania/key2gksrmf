@@ -1,0 +1,13 @@
+/target/
+nul
+*.exe
+*.pdb
+.vscode/
+
+# 런타임 사용자 설정
+config.json
+config.json.bak
+
+# Windows
+Thumbs.db
+Desktop.ini
