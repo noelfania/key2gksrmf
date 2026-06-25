@@ -17,7 +17,7 @@ use windows::{
     Win32::{
         Foundation::*,
         Graphics::Gdi::*,
-        System::LibraryLoader::GetModuleHandleW,
+        System::{LibraryLoader::GetModuleHandleW, Threading::CreateMutexW},
         UI::{
             Input::KeyboardAndMouse::{GetAsyncKeyState, SetFocus, VK_CONTROL, VK_SHIFT},
             Shell::*,
@@ -46,6 +46,7 @@ static mut G_HWND_TOPMOST_CHECK: HWND = HWND(0 as _);
 static mut G_CONFIG: Option<config_store::AppConfig> = None;
 static mut G_NOTIFY_ICON_DATA: Option<NOTIFYICONDATAW> = None;
 static mut G_EMBEDDED_FONT: Option<font_manager::EmbeddedFont> = None;
+static mut G_SINGLE_INSTANCE_MUTEX: Option<HANDLE> = None;
 
 // 물리키 기반 조합 상태
 static mut G_COMPOSER: Option<hangul_engine::HangulComposer> = None;
@@ -171,6 +172,41 @@ unsafe fn cleanup_embedded_font() {
     }
 }
 
+unsafe fn focus_existing_instance() {
+    if let Ok(hwnd) = FindWindowW(w!("gksrmf_wnd"), None) {
+        if hwnd != HWND(0 as _) {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+unsafe fn cleanup_single_instance_mutex() {
+    if let Some(mutex) = G_SINGLE_INSTANCE_MUTEX.take() {
+        let _ = CloseHandle(mutex);
+    }
+}
+
+unsafe fn acquire_single_instance() -> bool {
+    let mutex = match CreateMutexW(None, false, w!("Local\\gksrmf_single_instance")) {
+        Ok(mutex) => mutex,
+        Err(_) => {
+            // mutex 생성 실패 시 앱 사용성 저하를 막기 위해 단일 실행 가드는 건너뛴다.
+            return true;
+        }
+    };
+
+    let already_exists = GetLastError() == ERROR_ALREADY_EXISTS;
+    G_SINGLE_INSTANCE_MUTEX = Some(mutex);
+
+    if already_exists {
+        focus_existing_instance();
+        cleanup_single_instance_mutex();
+        return false;
+    }
+    true
+}
+
 unsafe fn render_composition_text(hwnd: HWND, text: &str) {
     let start = G_COMPOSE_START.unwrap_or(0);
     let end = start + G_COMPOSE_LEN_UTF16;
@@ -264,6 +300,10 @@ unsafe extern "system" fn owner_wnd_proc(
 }
 
 unsafe fn run() {
+    if !acquire_single_instance() {
+        return;
+    }
+
     let cfg = config_store::load();
     startup_registry::sync_on_startup(cfg.start_with_windows);
     G_CONFIG = Some(cfg.clone());
@@ -370,6 +410,7 @@ unsafe fn run() {
         let _ = TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    cleanup_single_instance_mutex();
 }
 
 unsafe fn save_window_bounds(hwnd: HWND) {
@@ -504,6 +545,7 @@ unsafe extern "system" fn wnd_proc(
                 IDM_EXIT => {
                     save_window_bounds(hwnd);
                     cleanup_embedded_font();
+                    cleanup_single_instance_mutex();
                     if let Some(nid) = &G_NOTIFY_ICON_DATA {
                         tray_manager::remove_tray_icon(nid);
                     }
