@@ -1,20 +1,10 @@
-<p align="center" style="display:flex; align-items:center; justify-content:center; gap:12px;">
-  <img src="./doc/images/app-icon.png" alt="key2gksrmf アプリアイコン" width="56" />
-  <span style="font-size:52px; font-weight:700; line-height:1;">key2gksrmf</span>
-</p>
-
-<p align="center">
-  <strong>物理キーをハングルに変換</strong><br/>
-  Windows に韓国語キーボードレイアウトがなくても、ハングル入力可能
-</p>
-
-<p align="center">
+# key2gksrmf
+<p >
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-blue" alt="Windows 10/11" />
   <img src="https://img.shields.io/badge/rust-edition%202021-orange" alt="Rust 2021" />
-  <img src="https://img.shields.io/badge/license-private-lightgrey" alt="license" />
 </p>
 
----
+
 
 ## プレビュー
 
@@ -35,7 +25,6 @@
 | 対象ユーザー | 韓国語キーボードレイアウトがない Windows ユーザー |
 | プラットフォーム | Windows 10/11 (Win32) |
 
----
 
 
 ## Web デモ
@@ -45,8 +34,6 @@
 - `F1` または `ㅎ / A` で韓/英モード切り替え
 - 物理キー基準の二式ハングル入力（例: `gksrmf` → `한글`）
 - Windows ネイティブ版のダウンロードは下記 Releases を利用
-
----
 
 
 ## ダウンロード
