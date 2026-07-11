@@ -24,6 +24,7 @@ pub const WM_TRAY: u32 = WM_APP + 1;
 pub const IDM_ALWAYS_ON_TOP: u32 = 1001;
 pub const IDM_START_WITH_WINDOWS: u32 = 1002;
 pub const IDM_EXIT: u32 = 1003;
+pub const IDM_GLOBAL_HOTKEY: u32 = 1004;
 
 const IDI_GKSRMF_LIGHT: usize = 101;
 const IDI_GKSRMF_DARK: usize = 102;
@@ -135,6 +136,19 @@ pub unsafe fn show_context_menu(hwnd: HWND, cfg: &config_store::AppConfig) {
         MF_STRING
     };
     AppendMenuW(hmenu, startup_flag, IDM_START_WITH_WINDOWS as usize, w!("Start with Windows")).ok();
+
+    let hotkey_flag = if cfg.global_hotkey_open {
+        MF_STRING | MF_CHECKED
+    } else {
+        MF_STRING
+    };
+    AppendMenuW(
+        hmenu,
+        hotkey_flag,
+        IDM_GLOBAL_HOTKEY as usize,
+        w!("Ctrl+Alt+Shift+G (Open Window)"),
+    )
+    .ok();
 
     AppendMenuW(hmenu, MF_SEPARATOR, 0, None).ok();
     AppendMenuW(hmenu, MF_STRING, IDM_EXIT as usize, w!("Exit")).ok();

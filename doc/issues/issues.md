@@ -79,8 +79,8 @@ gksrmf를 만들면서 마주한 문제, 검토, 해결 여부를 모아 둔 문
 ## 브랜딩·레이아웃·입력 보정 (해결)
 
 ### [레이아웃 변경](/doc/images/layout.png)
-- 상단 상태바를 `F1` 그룹박스 안의 `ㅎ`/`A` 라디오 + `Always on Top` 체크박스 형태로 변경했다.
-- 에디터에 가로 스크롤(`WS_HSCROLL`, `ES_AUTOHSCROLL`)을 추가했다.
+- 상단 상태바를 `F1` 그룹박스 안의 `ㅎ`/`A` 라디오 + `Wrap` + `Always on Top` 체크박스 형태로 변경했다.
+- Wrap 해제 시에만 에디터에 가로 스크롤(`WS_HSCROLL`, `ES_AUTOHSCROLL`)을 사용한다.
 
 ### 받침 이슈 (`줬` / `줫`)
 - `hangul_engine`에 `wnjT -> 줬`, `wnjt -> 줫` 회귀 테스트를 추가했다.
@@ -94,3 +94,54 @@ gksrmf를 만들면서 마주한 문제, 검토, 해결 여부를 모아 둔 문
 - 프로그램 표시명을 `key2gksrmf`로 통일했다.
 - 창 타이틀은 `key2gksrmf 64bit {version}` 형식으로 표시한다.
 - 트레이 우클릭 메뉴를 영어(`Always on Top`, `Start with Windows`, `Exit`)로 변경했다.
+
+## Alt+Tab 포커스·Wrap 토글 (해결)
+
+### Alt+Tab 후 타이핑 불가
+- **원인**: 창이 활성화되어도 포커스가 에디터가 아닌 다른 컨트롤(또는 메인 창)에 남을 수 있음.
+- **해결**: `WM_ACTIVATE`에서 `WA_INACTIVE`가 아니면 `SetFocus(EDIT)`로 에디터에 포커스를 준다.
+
+### Word Wrap 체크박스
+- 상태바 `Always on Top` 왼쪽에 `Wrap` 체크박스를 추가했다. 단축키는 **Alt+Z**.
+- 기본값 `word_wrap=true`: 가로 스크롤 비활성, 창 너비 초과 문자열은 자동 줄바꿈.
+- 해제 시: `WS_HSCROLL` + `ES_AUTOHSCROLL`로 가로 스크롤.
+- Win32 `EDIT`은 생성 후 `ES_AUTOHSCROLL`을 바꿀 수 없어, 토글 시 컨트롤을 재생성하고 텍스트·선택 범위를 이관한다.
+- `config.json`의 `word_wrap`에 영속화한다.
+
+## 행 번호·툴팁·전역 단축키 (해결)
+
+### 행 번호 거터
+- Wrap 시 행 구분이 어려워 에디터 왼쪽에 폭 44px 거터를 추가했다.
+- Win32 `EDIT`에는 행 번호 기능이 없어 자체 window class(`k2g_gutter`)로 `WM_PAINT`에서 직접 그린다.
+- `EM_GETFIRSTVISIBLELINE`/`EM_LINEINDEX`로 시각행을 순회하고, 시작 문자 앞 개행 수로 **논리 행 번호**를 계산한다. Wrap으로 꺾인 연속행은 번호를 생략한다.
+
+### 상태바 툴팁
+- `F1` 그룹박스 레이아웃을 제거하고 `ㅎ`/`A` 라디오를 그대로 나열했다.
+- 대신 comctl32 툴팁으로 라디오에 `F1`, Wrap 체크박스에 `Alt + Z`를 마우스오버 시 표시한다.
+
+### 툴팁이 표시되지 않던 문제
+- **원인**: 매니페스트가 없어 구버전 comctl32 5.82가 로드되는데, windows 크레이트의 `TTTOOLINFOW` 전체 크기(`cbSize`)는 v6 기준이라 `TTM_ADDTOOLW`가 조용히 거부됐다.
+- **해결**: `assets/app.manifest`에 comctl32 v6 의존성을 선언하고 `key2gksrmf.rc`에 `RT_MANIFEST`로 임베드했다.
+- 부수 효과: 체크박스·라디오·스크롤바가 현대식 테마 렌더링으로 바뀐다. exe 크기·성능 영향은 무시 가능한 수준.
+
+## 레이아웃 다듬기·색상 테마 (해결)
+
+### 여백 제거와 구분선
+- 창 가장자리와 거터·에디터 사이 8px 외곽 여백을 제거하고 창 끝까지 채우도록 변경했다.
+- 대신 1px 구분선 3종을 그린다: 타이틀바↔상태바·상태바↔에디터(메인 창 `WM_PAINT`), 거터↔에디터(`paint_gutter`).
+- 에디터 첫 행이 구분선에 붙지 않도록 `EM_SETRECT`로 상단 6px·왼쪽 4px 내부 여백을 준다.
+  `WM_SIZE`·`WM_SETFONT`가 포맷 영역을 초기화하므로 그 후마다 재적용해야 한다.
+  거터는 `EM_GETRECT` 상단 오프셋을 읽으므로 행 번호 정렬이 자동으로 따라온다.
+
+### 현재 커서 행 강조
+- 거터에서 캐럿(`EM_GETSEL`)이 속한 논리 행 번호를 `COLOR_WINDOWTEXT`(진한 색)로, 나머지는 회색으로 표시한다.
+
+### 색상 커스터마이즈
+- `config.json`의 `colors`에 `gutter_background`, `line_number`, `status_bar`, `editor_background`를 `"#RRGGBB"`로 지정할 수 있다.
+- 값이 없거나 파싱 실패 시 시스템 기본색으로 폴백한다 (`parse_hex_color` 단위 테스트 포함).
+- `COLORREF`는 바이트 순서가 `0x00BBGGRR`이므로 파서에서 변환한다.
+
+### 전역 단축키 Ctrl+Alt+Shift+G
+- `RegisterHotKey`로 등록하고 `WM_HOTKEY`에서 창 표시 + 에디터 포커스 처리.
+- 트레이 메뉴 `Ctrl+Alt+Shift+G (Open Window)` 체크로 on/off. 기본은 off (`global_hotkey_open: false`).
+- 다른 앱이 조합을 선점해 등록 실패 시 토글에서는 메시지박스로 안내하고, 시작 시에는 조용히 설정을 원복한다.

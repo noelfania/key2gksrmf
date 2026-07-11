@@ -20,7 +20,7 @@
 
 - 입력 창 포커스 안에서 `WM_KEYDOWN` 물리키 → 두벌식 한글 완성형 조합
 - 한/영 모드 전환 (상태바 클릭, F1)
-- 상태바 항상 위 체크박스, 트레이 컨텍스트 메뉴
+- 상태바 Wrap 체크박스(Alt+Z), Always on Top 체크박스, 트레이 컨텍스트 메뉴
 - 설정 영속화(JSON), 창 위치·크기 저장, 시작 프로그램 레지스트리 동기화
 - 내장 한글 폰트 (Pretendard Regular)
 - Windows 표준 Unicode 클립보드 복사/붙여넣기
@@ -145,16 +145,53 @@ flowchart TD
 | 컨트롤 | ID | 설명 |
 |---|---|---|
 | 배경 | — | `STATIC` 컨테이너 |
-| F1 그룹 | — | `F1` 라벨이 붙은 그룹박스 |
-| 한 모드 | `IDC_MODE_HAN` (2002) | `ㅎ` 라디오 버튼 |
-| 영 모드 | `IDC_MODE_ENG` (2003) | `A` 라디오 버튼 |
+| 한 모드 | `IDC_MODE_HAN` (2002) | `ㅎ` 라디오 버튼, 툴팁 `F1` |
+| 영 모드 | `IDC_MODE_ENG` (2003) | `A` 라디오 버튼, 툴팁 `F1` |
+| Wrap | `IDC_WORD_WRAP_CHECK` (2004) | 자동 줄바꿈 체크박스, 툴팁 `Alt + Z`, 기본 켜짐 |
 | 항상 위 | `IDC_ALWAYS_ON_TOP_CHECK` (2001) | `Always on Top` 체크박스, 트레이 메뉴와 동기화 |
+
+- 툴팁은 comctl32 `tooltips_class32` 하나에 `TTM_ADDTOOLW`(`TTF_IDISHWND | TTF_SUBCLASS`)로 등록
 
 ### 5.3 입력 영역
 
-- Win32 멀티라인 `EDIT` (`ES_MULTILINE`, `ES_AUTOHSCROLL`, `ES_AUTOVSCROLL`, `ES_WANTRETURN`)
+- Win32 멀티라인 `EDIT` (`ES_MULTILINE`, `ES_AUTOVSCROLL`, `ES_WANTRETURN`)
+- `word_wrap=true`(기본): 가로 스크롤 없음 → 창 너비 초과 시 자동 줄바꿈
+- `word_wrap=false`: `WS_HSCROLL` + `ES_AUTOHSCROLL`로 가로 스크롤
+- Wrap 토글 시 `ES_AUTOHSCROLL`은 생성 후 변경 불가이므로 EDIT를 재생성하고 텍스트·선택을 이관
 - `edit_proc` subclass로 키 입력 가로채기
 - 내장 폰트 `WM_SETFONT` 적용
+- `WM_ACTIVATE` 시 에디터에 자동 포커스 (Alt+Tab 복귀 후 즉시 타이핑 가능)
+
+#### 레이아웃·구분선
+
+- 거터·에디터는 창 가장자리까지 여백 없이 채운다 (외곽 마진 없음)
+- 구분선 3종 (`COLOR_BTNSHADOW` 1px):
+  - 타이틀바↔상태바: 클라이언트 최상단, 메인 창 `WM_PAINT`에서 그림
+  - 상태바↔에디터: `STATUS_BAR_HEIGHT - 1` 위치, 메인 창 `WM_PAINT`에서 그림
+  - 거터↔에디터: 거터 오른쪽 끝, `paint_gutter`에서 그림
+- 에디터 첫 행 여백: `EM_SETRECT`로 포맷 영역에 상단 6px·왼쪽 4px 인셋.
+  `WM_SIZE`·`WM_SETFONT`가 포맷 영역을 재계산하므로 리사이즈·폰트 적용 후 재호출 필요
+
+#### 행 번호 거터 (폭 44px)
+
+- 에디터 왼쪽에 자체 window class(`k2g_gutter`)의 자식 창을 배치하고 `WM_PAINT`에서 직접 그린다
+- `EM_GETFIRSTVISIBLELINE` → `EM_LINEINDEX`로 시각행 시작 문자 인덱스를 얻고, 그 이전 개행 수로 **논리 행 번호** 계산
+- Wrap으로 꺾인 연속 시각행에는 번호를 표시하지 않음 (논리 행 첫 시각행에만 표시)
+- **현재 커서 행 강조**: `EM_GETSEL` 캐럿 위치의 논리 행 번호를 `COLOR_WINDOWTEXT`로, 나머지는 `line_number` 색으로 표시
+- 행 높이는 에디터 폰트(`WM_GETFONT`)의 `GetTextMetricsW` 기준, `EM_GETRECT` 상단 오프셋으로 정렬 (에디터 상단 패딩과 자동 동기화)
+- 갱신: `EN_CHANGE`/`EN_VSCROLL`, `WM_SIZE`, `edit_proc`의 키·마우스·스크롤 처리 후 `InvalidateRect`
+
+#### 색상 테마 (`AppConfig.colors`)
+
+| 설정 키 | 대상 | 기본값 (시스템 색) |
+|---|---|---|
+| `gutter_background` | 거터 배경 | `COLOR_BTNFACE` |
+| `line_number` | 행 번호 텍스트 | `COLOR_GRAYTEXT` |
+| `status_bar` | 상태바 배경 | `COLOR_BTNFACE` |
+| `editor_background` | 에디터 배경 | `COLOR_WINDOW` |
+
+- `"#RRGGBB"` 형식 (`config_store::parse_hex_color`), 없거나 파싱 실패 시 기본값으로 폴백
+- 시작 시 `editor_window::init_theme`에서 브러시를 생성하고 `WM_CTLCOLORSTATIC`/`WM_CTLCOLORBTN`/`WM_CTLCOLOREDIT`·`paint_gutter`에서 사용, 종료 시 `cleanup_theme`
 
 ### 5.4 항상 위
 
@@ -167,9 +204,17 @@ flowchart TD
 |---|---|
 | 싱글클릭 | 없음 |
 | 더블클릭 | 창 표시(`SW_RESTORE`) 및 포커스 |
-| 우클릭 | Always on Top, Start with Windows, Exit |
+| 우클릭 | Always on Top, Start with Windows, Ctrl+Alt+Shift+G (Open Window), Exit |
 
 - 아이콘: 라이트/다크 테마별 리소스 (`WM_SETTINGCHANGE` 시 갱신)
+
+### 5.6 전역 단축키 (Ctrl+Alt+Shift+G)
+
+- `RegisterHotKey(hwnd, HOTKEY_ID_OPEN, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 'G')`
+- `WM_HOTKEY` 수신 시 창 표시(`SW_RESTORE`) + 에디터 포커스 → 즉시 타이핑 가능
+- 트레이 메뉴 `Ctrl+Alt+Shift+G (Open Window)` 체크로 on/off, 기본 **off**
+- 등록 실패(다른 앱 선점) 시: 토글에서는 메시지박스 안내, 시작 시에는 조용히 설정 원복
+- `AppConfig.global_hotkey_open`에 영속화
 
 ---
 
@@ -221,6 +266,14 @@ flowchart TD
 {
   "always_on_top": false,
   "start_with_windows": false,
+  "word_wrap": true,
+  "global_hotkey_open": false,
+  "colors": {
+    "gutter_background": "#F0F0F0",
+    "line_number": "#6E6E6E",
+    "status_bar": "#F0F0F0",
+    "editor_background": "#FFFFFF"
+  },
   "window": {
     "x": 100,
     "y": 100,
@@ -231,11 +284,14 @@ flowchart TD
 ```
 
 - `x`, `y`는 optional. 없거나 유효 모니터 밖이면 `CW_USEDEFAULT`
+- `word_wrap` 기본값: `true` (기존 config에 없으면 자동 줄바꿈)
+- `global_hotkey_open` 기본값: `false` (전역 단축키 미등록)
+- `colors`의 각 키는 optional `"#RRGGBB"`. 없거나 형식이 잘못되면 시스템 기본색으로 폴백 (5.3 색상 테마 참고)
 
 ### 7.2 저장 규칙
 
 - 경로: 실행 파일과 같은 디렉터리의 `config.json`
-- 저장 시점: 항상 위/시작 시 기동 토글, 창 숨김·종료·destroy 시 위치·크기
+- 저장 시점: 항상 위/시작 시 기동/Wrap/전역 단축키 토글, 창 숨김·종료·destroy 시 위치·크기
 - 파싱 실패: `.json.bak` 백업 후 기본값
 
 ---

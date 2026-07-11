@@ -20,14 +20,19 @@ use windows::{
         Graphics::Gdi::*,
         System::{LibraryLoader::GetModuleHandleW, Threading::CreateMutexW},
         UI::{
-            Input::KeyboardAndMouse::{GetAsyncKeyState, SetFocus, VK_CONTROL, VK_SHIFT},
+            Input::KeyboardAndMouse::{
+                GetAsyncKeyState, RegisterHotKey, SetFocus, UnregisterHotKey, MOD_ALT,
+                MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_CONTROL, VK_SHIFT,
+            },
             Shell::*,
             WindowsAndMessaging::*,
         },
     },
 };
 
-use tray_manager::{IDM_ALWAYS_ON_TOP, IDM_EXIT, IDM_START_WITH_WINDOWS, WM_TRAY};
+use tray_manager::{
+    IDM_ALWAYS_ON_TOP, IDM_EXIT, IDM_GLOBAL_HOTKEY, IDM_START_WITH_WINDOWS, WM_TRAY,
+};
 
 // EditControl 메시지 상수 (windows 크레이트 미노출)
 const EM_GETSEL: u32 = 0x00B0;
@@ -37,16 +42,19 @@ const VK_BACKSPACE: u32 = 0x08;
 const VK_F1: u32 = 0x70;
 const BST_UNCHECKED_RAW: usize = 0;
 const BST_CHECKED_RAW: usize = 1;
+const EN_VSCROLL_RAW: u16 = 0x0602;
+// 전역 단축키 (Ctrl+Alt+Shift+G 창 열기)
+const HOTKEY_ID_OPEN: i32 = 1;
 
 // 전역 상태 (Win32 콜백에서 접근하기 위해 전역으로 관리)
 static mut G_HWND_MAIN: HWND = HWND(0 as _);
 static mut G_HWND_EDIT: HWND = HWND(0 as _);
 static mut G_HWND_STATUS_BAR: HWND = HWND(0 as _);
-static mut G_HWND_MODE_GROUP: HWND = HWND(0 as _);
-static mut G_HWND_MODE_GROUP_LABEL: HWND = HWND(0 as _);
+static mut G_HWND_GUTTER: HWND = HWND(0 as _);
 static mut G_HWND_MODE_HAN: HWND = HWND(0 as _);
 static mut G_HWND_MODE_ENG: HWND = HWND(0 as _);
 static mut G_HWND_TOPMOST_CHECK: HWND = HWND(0 as _);
+static mut G_HWND_WRAP_CHECK: HWND = HWND(0 as _);
 static mut G_CONFIG: Option<config_store::AppConfig> = None;
 static mut G_NOTIFY_ICON_DATA: Option<NOTIFYICONDATAW> = None;
 static mut G_EMBEDDED_FONT: Option<font_manager::EmbeddedFont> = None;
@@ -198,6 +206,140 @@ unsafe fn sync_topmost_checkbox(is_on: bool) {
         WPARAM(check_state),
         LPARAM(0),
     );
+}
+
+unsafe fn sync_wrap_checkbox(is_on: bool) {
+    if G_HWND_WRAP_CHECK == HWND(0 as _) {
+        return;
+    }
+    let check_state = if is_on { BST_CHECKED_RAW } else { BST_UNCHECKED_RAW };
+    SendMessageW(
+        G_HWND_WRAP_CHECK,
+        BM_SETCHECK,
+        WPARAM(check_state),
+        LPARAM(0),
+    );
+}
+
+unsafe fn get_edit_text(hwnd: HWND) -> String {
+    let len = GetWindowTextLengthW(hwnd) as usize;
+    if len == 0 {
+        return String::new();
+    }
+    let mut buf: Vec<u16> = vec![0u16; len + 1];
+    GetWindowTextW(hwnd, &mut buf);
+    buf.truncate(len);
+    String::from_utf16_lossy(&buf)
+}
+
+unsafe fn set_edit_text(hwnd: HWND, text: &str) {
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
+}
+
+unsafe fn subclass_edit_control(hwnd: HWND) {
+    G_ORIG_EDIT_PROC = std::mem::transmute(SetWindowLongPtrW(
+        hwnd,
+        GWLP_WNDPROC,
+        edit_proc as *const () as isize,
+    ));
+}
+
+unsafe fn apply_font_to_edit(hwnd: HWND) {
+    if let Some(font) = G_EMBEDDED_FONT.as_ref() {
+        font_manager::apply_font_to_control(hwnd, font.hfont());
+    }
+}
+
+/// Wrap 토글: ES_AUTOHSCROLL은 생성 후 변경 불가하므로 EDIT를 재생성한다.
+unsafe fn toggle_word_wrap(hwnd: HWND) {
+    commit_composition();
+
+    let Some(cfg) = G_CONFIG.as_mut() else {
+        return;
+    };
+    cfg.word_wrap = !cfg.word_wrap;
+    let word_wrap = cfg.word_wrap;
+    config_store::save(cfg);
+    sync_wrap_checkbox(word_wrap);
+
+    if G_HWND_EDIT == HWND(0 as _) {
+        return;
+    }
+
+    let old_text = get_edit_text(G_HWND_EDIT);
+    let (sel_start, sel_end) = get_selection(G_HWND_EDIT);
+
+    let _ = DestroyWindow(G_HWND_EDIT);
+    G_HWND_EDIT = HWND(0 as _);
+    G_ORIG_EDIT_PROC = None;
+
+    let hinstance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect).ok();
+    let edit_w =
+        rect.right - editor_window::EDIT_OUTER_MARGIN * 2 - editor_window::GUTTER_WIDTH;
+    let edit_h = rect.bottom
+        - editor_window::STATUS_BAR_HEIGHT
+        - editor_window::EDIT_OUTER_MARGIN * 2;
+
+    G_HWND_EDIT = editor_window::create_edit_control(hwnd, hinstance, word_wrap, edit_w, edit_h);
+    subclass_edit_control(G_HWND_EDIT);
+    apply_font_to_edit(G_HWND_EDIT);
+    set_edit_text(G_HWND_EDIT, &old_text);
+    set_selection(G_HWND_EDIT, sel_start, sel_end);
+    editor_window::set_gutter_target(G_HWND_EDIT);
+
+    editor_window::resize_editor_controls(
+        G_HWND_STATUS_BAR,
+        G_HWND_MODE_HAN,
+        G_HWND_MODE_ENG,
+        G_HWND_WRAP_CHECK,
+        G_HWND_TOPMOST_CHECK,
+        G_HWND_GUTTER,
+        G_HWND_EDIT,
+        rect.right,
+        rect.bottom,
+    );
+
+    focus_editor();
+}
+
+unsafe fn handle_alt_z_word_wrap(hwnd: HWND) -> bool {
+    toggle_word_wrap(hwnd);
+    G_SUPPRESS_NEXT_WM_CHAR = true;
+    true
+}
+
+unsafe fn register_open_hotkey(hwnd: HWND) -> bool {
+    RegisterHotKey(
+        hwnd,
+        HOTKEY_ID_OPEN,
+        MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+        'G' as u32,
+    )
+    .is_ok()
+}
+
+unsafe fn toggle_global_hotkey(hwnd: HWND) {
+    let cfg = G_CONFIG.as_mut().unwrap();
+    if cfg.global_hotkey_open {
+        let _ = UnregisterHotKey(hwnd, HOTKEY_ID_OPEN);
+        cfg.global_hotkey_open = false;
+        config_store::save(cfg);
+    } else if register_open_hotkey(hwnd) {
+        cfg.global_hotkey_open = true;
+        config_store::save(cfg);
+    } else {
+        // 다른 앱이 같은 조합을 선점한 경우
+        let app_name = app_info::to_wide(app_info::APP_NAME);
+        MessageBoxW(
+            None,
+            w!("전역 단축키(Ctrl+Alt+Shift+G) 등록에 실패했습니다.\n다른 프로그램이 이미 사용 중일 수 있습니다."),
+            PCWSTR(app_name.as_ptr()),
+            MB_ICONWARNING | MB_OK,
+        );
+    }
 }
 
 unsafe fn toggle_input_mode() {
@@ -357,6 +499,7 @@ unsafe fn run() {
     let cfg = config_store::load();
     startup_registry::sync_on_startup(cfg.start_with_windows);
     G_CONFIG = Some(cfg.clone());
+    editor_window::init_theme(&cfg.colors);
 
     let hinstance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
 
@@ -441,6 +584,14 @@ unsafe fn run() {
 
     G_HWND_MAIN = hwnd;
 
+    // 설정에 따라 전역 단축키 등록 (실패 시 조용히 설정 원복)
+    if cfg.global_hotkey_open && !register_open_hotkey(hwnd) {
+        if let Some(c) = G_CONFIG.as_mut() {
+            c.global_hotkey_open = false;
+            config_store::save(c);
+        }
+    }
+
     G_NOTIFY_ICON_DATA = Some(tray_manager::register_tray_icon(hwnd, hinstance));
 
     // 최초 실행 시에도 바로 입력할 수 있게 창을 띄운다
@@ -524,38 +675,93 @@ unsafe extern "system" fn wnd_proc(
                 toggle_input_mode_and_focus_editor();
                 return LRESULT(0);
             }
+            if msg == WM_SYSKEYDOWN && wparam.0 as u32 == 'Z' as u32 {
+                handle_alt_z_word_wrap(hwnd);
+                return LRESULT(0);
+            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+
+        WM_SYSCHAR => {
+            // Alt+Z 메뉴 비프음 억제
+            if G_SUPPRESS_NEXT_WM_CHAR && wparam.0 as u32 == 'z' as u32 {
+                G_SUPPRESS_NEXT_WM_CHAR = false;
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+
+        WM_ACTIVATE => {
+            // Alt+Tab 등으로 창이 활성화되면 바로 타이핑할 수 있게 에디터에 포커스
+            if (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE {
+                focus_editor();
+            }
+            LRESULT(0)
         }
 
         WM_CTLCOLORBTN | WM_CTLCOLORSTATIC => {
             let hdc = HDC(wparam.0 as *mut core::ffi::c_void);
             let _ = SetBkMode(hdc, OPAQUE);
-            let _ = SetBkColor(hdc, COLORREF(GetSysColor(COLOR_BTNFACE)));
-            LRESULT(GetSysColorBrush(COLOR_BTNFACE).0 as isize)
+            let _ = SetBkColor(hdc, editor_window::theme().status_bar);
+            LRESULT(editor_window::status_bar_brush().0 as isize)
+        }
+
+        WM_CTLCOLOREDIT => {
+            let hdc = HDC(wparam.0 as *mut core::ffi::c_void);
+            let _ = SetBkColor(hdc, editor_window::theme().editor_bg);
+            LRESULT(editor_window::editor_bg_brush().0 as isize)
+        }
+
+        WM_PAINT => {
+            // 타이틀바↔상태바, 상태바↔에디터 구분선 (상태바 위아래 1px)
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = BeginPaint(hwnd, &mut ps);
+            let mut rect = RECT::default();
+            GetClientRect(hwnd, &mut rect).ok();
+            let top_line = RECT {
+                left: 0,
+                top: 0,
+                right: rect.right,
+                bottom: 1,
+            };
+            let bottom_line = RECT {
+                left: 0,
+                top: editor_window::STATUS_BAR_HEIGHT - 1,
+                right: rect.right,
+                bottom: editor_window::STATUS_BAR_HEIGHT,
+            };
+            FillRect(hdc, &top_line, editor_window::separator_brush());
+            FillRect(hdc, &bottom_line, editor_window::separator_brush());
+            let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
         }
 
         WM_CREATE => {
-            let controls = editor_window::create_editor_controls(hwnd);
+            let word_wrap = G_CONFIG
+                .as_ref()
+                .map(|cfg| cfg.word_wrap)
+                .unwrap_or(true);
+            let controls = editor_window::create_editor_controls(hwnd, word_wrap);
             G_HWND_STATUS_BAR = controls.hwnd_status_bar;
-            G_HWND_MODE_GROUP = controls.hwnd_mode_group;
-            G_HWND_MODE_GROUP_LABEL = controls.hwnd_mode_group_label;
+            G_HWND_GUTTER = controls.hwnd_gutter;
             G_HWND_MODE_HAN = controls.hwnd_mode_han;
             G_HWND_MODE_ENG = controls.hwnd_mode_eng;
+            G_HWND_WRAP_CHECK = controls.hwnd_wrap_check;
             G_HWND_TOPMOST_CHECK = controls.hwnd_topmost_check;
             G_HWND_EDIT = controls.hwnd_edit;
 
+            // 단축키 안내 툴팁 (라디오: F1, Wrap: Alt+Z)
+            editor_window::setup_tooltips(hwnd, &controls);
+
             // Edit 컨트롤 Subclassing (Ctrl+Z, Ctrl+Y 가로채기)
-            G_ORIG_EDIT_PROC = std::mem::transmute(SetWindowLongPtrW(
-                G_HWND_EDIT,
-                GWLP_WNDPROC,
-                edit_proc as *const () as isize,
-            ));
+            subclass_edit_control(G_HWND_EDIT);
 
             G_INPUT_MODE = InputMode::Han;
             sync_mode_radio(G_INPUT_MODE);
 
             if let Some(cfg) = G_CONFIG.as_ref() {
                 sync_topmost_checkbox(cfg.always_on_top);
+                sync_wrap_checkbox(cfg.word_wrap);
                 if cfg.always_on_top {
                     editor_window::apply_always_on_top(hwnd, true);
                 }
@@ -565,12 +771,14 @@ unsafe extern "system" fn wnd_proc(
                 let hfont = font.hfont();
                 let small_hfont = font.small_hfont();
                 font_manager::apply_font_to_control(G_HWND_EDIT, hfont);
-                font_manager::apply_font_to_control(G_HWND_MODE_GROUP, hfont);
-                font_manager::apply_font_to_control(G_HWND_MODE_GROUP_LABEL, small_hfont);
                 font_manager::apply_font_to_control(G_HWND_MODE_HAN, hfont);
                 font_manager::apply_font_to_control(G_HWND_MODE_ENG, hfont);
+                font_manager::apply_font_to_control(G_HWND_WRAP_CHECK, small_hfont);
                 font_manager::apply_font_to_control(G_HWND_TOPMOST_CHECK, small_hfont);
                 G_EMBEDDED_FONT = Some(font);
+                // WM_SETFONT가 포맷 영역을 재계산하므로 여백 재적용
+                editor_window::apply_editor_padding(G_HWND_EDIT);
+                editor_window::invalidate_gutter();
             }
             LRESULT(0)
         }
@@ -580,11 +788,11 @@ unsafe extern "system" fn wnd_proc(
             let h = ((lparam.0 >> 16) & 0xFFFF) as i32;
             editor_window::resize_editor_controls(
                 G_HWND_STATUS_BAR,
-                G_HWND_MODE_GROUP,
-                G_HWND_MODE_GROUP_LABEL,
                 G_HWND_MODE_HAN,
                 G_HWND_MODE_ENG,
+                G_HWND_WRAP_CHECK,
                 G_HWND_TOPMOST_CHECK,
+                G_HWND_GUTTER,
                 G_HWND_EDIT,
                 w,
                 h,
@@ -592,13 +800,26 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
 
+        WM_HOTKEY => {
+            if wparam.0 as i32 == HOTKEY_ID_OPEN {
+                tray_manager::show_or_focus_window(hwnd, G_HWND_EDIT);
+            }
+            LRESULT(0)
+        }
+
         WM_COMMAND => {
             let notif = (wparam.0 >> 16) as u16;
             let ctrl_id = (wparam.0 & 0xFFFF) as u16;
 
-            // 물리키 기반 입력으로 전환했으므로 EN_CHANGE 후처리는 수행하지 않는다.
-            if notif == EN_CHANGE as u16 && lparam.0 as isize == G_HWND_EDIT.0 as isize {
-                return LRESULT(0);
+            if lparam.0 as isize == G_HWND_EDIT.0 as isize {
+                // 텍스트 변경·세로 스크롤 시 행 번호 거터 갱신
+                if notif == EN_CHANGE as u16 || notif == EN_VSCROLL_RAW {
+                    editor_window::invalidate_gutter();
+                }
+                // 물리키 기반 입력으로 전환했으므로 EN_CHANGE 후처리는 수행하지 않는다.
+                if notif == EN_CHANGE as u16 {
+                    return LRESULT(0);
+                }
             }
 
             match ctrl_id as u32 {
@@ -627,11 +848,18 @@ unsafe extern "system" fn wnd_proc(
                         toggle_always_on_top(hwnd);
                     }
                 }
+                editor_window::IDC_WORD_WRAP_CHECK => {
+                    if notif == BN_CLICKED as u16 {
+                        toggle_word_wrap(hwnd);
+                    }
+                }
                 IDM_ALWAYS_ON_TOP => toggle_always_on_top(hwnd),
                 IDM_START_WITH_WINDOWS => toggle_start_with_windows(),
+                IDM_GLOBAL_HOTKEY => toggle_global_hotkey(hwnd),
                 IDM_EXIT => {
                     save_window_bounds(hwnd);
                     cleanup_embedded_font();
+                    editor_window::cleanup_theme();
                     cleanup_single_instance_mutex();
                     if let Some(nid) = &G_NOTIFY_ICON_DATA {
                         tray_manager::remove_tray_icon(nid);
@@ -692,6 +920,7 @@ unsafe extern "system" fn wnd_proc(
         WM_DESTROY => {
             save_window_bounds(hwnd);
             cleanup_embedded_font();
+            editor_window::cleanup_theme();
             if let Some(nid) = &G_NOTIFY_ICON_DATA {
                 tray_manager::remove_tray_icon(nid);
             }
@@ -709,7 +938,20 @@ unsafe extern "system" fn edit_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if msg == WM_CHAR {
+    let result = edit_proc_inner(hwnd, msg, wparam, lparam);
+    // 커서 이동·스크롤·편집 후 행 번호 거터 갱신
+    match msg {
+        WM_KEYDOWN | WM_SYSKEYDOWN | WM_CHAR | WM_MOUSEWHEEL | WM_VSCROLL | WM_HSCROLL
+        | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_PASTE | WM_CUT | WM_SETFOCUS | WM_SIZE => {
+            editor_window::invalidate_gutter();
+        }
+        _ => {}
+    }
+    result
+}
+
+unsafe fn edit_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if msg == WM_CHAR || msg == WM_SYSCHAR {
         if wparam.0 == 0x7F || G_SUPPRESS_NEXT_WM_CHAR {
             G_SUPPRESS_NEXT_WM_CHAR = false;
             return LRESULT(0);
@@ -724,6 +966,11 @@ unsafe extern "system" fn edit_proc(
         if key == VK_F1 {
             toggle_input_mode_and_focus_editor();
             G_SUPPRESS_NEXT_WM_CHAR = true;
+            return LRESULT(0);
+        }
+
+        if msg == WM_SYSKEYDOWN && key == 'Z' as u32 {
+            handle_alt_z_word_wrap(G_HWND_MAIN);
             return LRESULT(0);
         }
 
