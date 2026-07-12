@@ -140,7 +140,7 @@ flowchart TD
 - 작업 표시줄: 미표시 (invisible owner 창 패턴)
 - 리사이즈: `WS_THICKFRAME`, 에디터 외곽 8px 마진
 
-### 5.2 상태바 (높이 42px)
+### 5.2 상태바 (높이 34px)
 
 | 컨트롤 | ID | 설명 |
 |---|---|---|

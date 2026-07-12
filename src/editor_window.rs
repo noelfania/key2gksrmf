@@ -17,7 +17,9 @@ use windows::{
 use crate::config_store;
 
 pub const EDIT_OUTER_MARGIN: i32 = 8;
-pub const STATUS_BAR_HEIGHT: i32 = 42;
+pub const STATUS_BAR_HEIGHT: i32 = 34;
+// 상태바 컨트롤 상하 여백 (세로 중앙 정렬)
+const STATUS_PAD: i32 = 4;
 pub const GUTTER_WIDTH: i32 = 44;
 pub const IDC_ALWAYS_ON_TOP_CHECK: u32 = 2001;
 pub const IDC_MODE_HAN: u32 = 2002;
@@ -153,9 +155,9 @@ unsafe fn create_mode_han_radio(parent: HWND, hinstance: HINSTANCE) -> HWND {
             | WINDOW_STYLE(BS_AUTORADIOBUTTON as u32)
             | WINDOW_STYLE(WS_GROUP.0),
         EDIT_OUTER_MARGIN,
-        EDIT_OUTER_MARGIN,
+        STATUS_PAD,
         40,
-        STATUS_BAR_HEIGHT - EDIT_OUTER_MARGIN,
+        STATUS_BAR_HEIGHT - STATUS_PAD * 2,
         parent,
         HMENU(IDC_MODE_HAN as usize as *mut core::ffi::c_void),
         hinstance,
@@ -174,9 +176,9 @@ unsafe fn create_mode_eng_radio(parent: HWND, hinstance: HINSTANCE) -> HWND {
             | WS_TABSTOP
             | WINDOW_STYLE(BS_AUTORADIOBUTTON as u32),
         EDIT_OUTER_MARGIN + 48,
-        EDIT_OUTER_MARGIN,
+        STATUS_PAD,
         40,
-        STATUS_BAR_HEIGHT - EDIT_OUTER_MARGIN,
+        STATUS_BAR_HEIGHT - STATUS_PAD * 2,
         parent,
         HMENU(IDC_MODE_ENG as usize as *mut core::ffi::c_void),
         hinstance,
@@ -195,9 +197,9 @@ unsafe fn create_wrap_checkbox(parent: HWND, hinstance: HINSTANCE) -> HWND {
             | WS_TABSTOP
             | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
         0,
-        EDIT_OUTER_MARGIN,
+        STATUS_PAD,
         WRAP_CHECK_WIDTH,
-        STATUS_BAR_HEIGHT - EDIT_OUTER_MARGIN,
+        STATUS_BAR_HEIGHT - STATUS_PAD * 2,
         parent,
         HMENU(IDC_WORD_WRAP_CHECK as usize as *mut core::ffi::c_void),
         hinstance,
@@ -216,9 +218,9 @@ unsafe fn create_topmost_checkbox(parent: HWND, hinstance: HINSTANCE) -> HWND {
             | WS_TABSTOP
             | WINDOW_STYLE(BS_AUTOCHECKBOX as u32),
         0,
-        EDIT_OUTER_MARGIN,
+        STATUS_PAD,
         AOT_CHECK_WIDTH,
-        STATUS_BAR_HEIGHT - EDIT_OUTER_MARGIN,
+        STATUS_BAR_HEIGHT - STATUS_PAD * 2,
         parent,
         HMENU(IDC_ALWAYS_ON_TOP_CHECK as usize as *mut core::ffi::c_void),
         hinstance,
@@ -592,15 +594,17 @@ pub unsafe fn resize_editor_controls(
         .ok();
     }
 
+    let control_h = (STATUS_BAR_HEIGHT - STATUS_PAD * 2).max(16);
+
     if hwnd_mode_han != HWND(0 as _) {
         SetWindowPos(
             hwnd_mode_han,
-            HWND_TOP,
+            None,
             EDIT_OUTER_MARGIN,
-            EDIT_OUTER_MARGIN,
+            STATUS_PAD,
             40,
-            (STATUS_BAR_HEIGHT - EDIT_OUTER_MARGIN).max(16),
-            SET_WINDOW_POS_FLAGS(0),
+            control_h,
+            SWP_NOZORDER,
         )
         .ok();
     }
@@ -608,12 +612,12 @@ pub unsafe fn resize_editor_controls(
     if hwnd_mode_eng != HWND(0 as _) {
         SetWindowPos(
             hwnd_mode_eng,
-            HWND_TOP,
+            None,
             EDIT_OUTER_MARGIN + 48,
-            EDIT_OUTER_MARGIN,
+            STATUS_PAD,
             40,
-            (STATUS_BAR_HEIGHT - EDIT_OUTER_MARGIN).max(16),
-            SET_WINDOW_POS_FLAGS(0),
+            control_h,
+            SWP_NOZORDER,
         )
         .ok();
     }
@@ -621,12 +625,12 @@ pub unsafe fn resize_editor_controls(
     if hwnd_topmost_check != HWND(0 as _) {
         SetWindowPos(
             hwnd_topmost_check,
-            HWND_TOP,
+            None,
             (width - AOT_CHECK_WIDTH - EDIT_OUTER_MARGIN).max(EDIT_OUTER_MARGIN),
-            EDIT_OUTER_MARGIN,
+            STATUS_PAD,
             AOT_CHECK_WIDTH,
-            (STATUS_BAR_HEIGHT - EDIT_OUTER_MARGIN).max(16),
-            SET_WINDOW_POS_FLAGS(0),
+            control_h,
+            SWP_NOZORDER,
         )
         .ok();
     }
@@ -636,12 +640,12 @@ pub unsafe fn resize_editor_controls(
             .max(EDIT_OUTER_MARGIN);
         SetWindowPos(
             hwnd_wrap_check,
-            HWND_TOP,
+            None,
             wrap_x,
-            EDIT_OUTER_MARGIN,
+            STATUS_PAD,
             WRAP_CHECK_WIDTH,
-            (STATUS_BAR_HEIGHT - EDIT_OUTER_MARGIN).max(16),
-            SET_WINDOW_POS_FLAGS(0),
+            control_h,
+            SWP_NOZORDER,
         )
         .ok();
     }

@@ -145,3 +145,21 @@ gksrmf를 만들면서 마주한 문제, 검토, 해결 여부를 모아 둔 문
 - `RegisterHotKey`로 등록하고 `WM_HOTKEY`에서 창 표시 + 에디터 포커스 처리.
 - 트레이 메뉴 `Ctrl+Alt+Shift+G (Open Window)` 체크로 on/off. 기본은 off (`global_hotkey_open: false`).
 - 다른 앱이 조합을 선점해 등록 실패 시 토글에서는 메시지박스로 안내하고, 시작 시에는 조용히 설정을 원복한다.
+
+## UI 레이아웃·아이콘 보정 (해결)
+
+### 구분선이 컨트롤을 가리는 문제
+- 메인 창에 `WS_CLIPCHILDREN`을 추가해 `WM_PAINT` 구분선이 라디오·체크박스 위를 덮지 않도록 했다.
+
+### 리사이즈 시 레이아웃 깨짐
+- `resize_editor_controls`에서 `HWND_TOP` 대신 `SWP_NOZORDER`로 z-order 변경을 막았다.
+- `WM_SIZE` 후 `InvalidateRect`로 구분선 스트립을 다시 그리게 했다.
+
+### 상태바 간격
+- `STATUS_BAR_HEIGHT` 42→34, `STATUS_PAD` 4로 컨트롤 세로 중앙 정렬.
+
+### Wrap 토글 시 스크롤 점프
+- 에디터 재생성 후 `EM_SCROLLCARET`로 캐럿이 보이는 위치로 스크롤 복원.
+
+### 아이콘 교체
+- `icon-key2gksrmf-entry-2.png`에서 `key2gksrmf_light.ico`/`key2gksrmf_dark.ico` 및 `doc/images/app-icon.png`를 갱신했다.

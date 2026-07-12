@@ -38,6 +38,7 @@ use tray_manager::{
 const EM_GETSEL: u32 = 0x00B0;
 const EM_REPLACESEL: u32 = 0x00C2;
 const EM_SETSEL: u32 = 0x00B1;
+const EM_SCROLLCARET: u32 = 0x00B7;
 const VK_BACKSPACE: u32 = 0x08;
 const VK_F1: u32 = 0x70;
 const BST_UNCHECKED_RAW: usize = 0;
@@ -277,17 +278,16 @@ unsafe fn toggle_word_wrap(hwnd: HWND) {
     let hinstance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
     let mut rect = RECT::default();
     GetClientRect(hwnd, &mut rect).ok();
-    let edit_w =
-        rect.right - editor_window::EDIT_OUTER_MARGIN * 2 - editor_window::GUTTER_WIDTH;
-    let edit_h = rect.bottom
-        - editor_window::STATUS_BAR_HEIGHT
-        - editor_window::EDIT_OUTER_MARGIN * 2;
+    let edit_w = (rect.right - editor_window::GUTTER_WIDTH).max(1);
+    let edit_h = (rect.bottom - editor_window::STATUS_BAR_HEIGHT).max(1);
 
     G_HWND_EDIT = editor_window::create_edit_control(hwnd, hinstance, word_wrap, edit_w, edit_h);
     subclass_edit_control(G_HWND_EDIT);
     apply_font_to_edit(G_HWND_EDIT);
     set_edit_text(G_HWND_EDIT, &old_text);
     set_selection(G_HWND_EDIT, sel_start, sel_end);
+    // 재생성 직후 스크롤이 맨 위로 가므로 캐럿이 보이는 위치로 복원
+    SendMessageW(G_HWND_EDIT, EM_SCROLLCARET, WPARAM(0), LPARAM(0));
     editor_window::set_gutter_target(G_HWND_EDIT);
 
     editor_window::resize_editor_controls(
@@ -545,7 +545,8 @@ unsafe fn run() {
 
     // WS_VSCROLL은 에디터 컨트롤에 내장되어 있으므로 메인 창에는 불필요
     // 표준 캡션 레이아웃은 유지하되 최소화/최대화 버튼만 제거한다
-    let style = WS_OVERLAPPEDWINDOW & !WS_MINIMIZEBOX & !WS_MAXIMIZEBOX;
+    // WS_CLIPCHILDREN: 부모 WM_PAINT(구분선)가 자식 컨트롤을 덮어 그리지 않도록
+    let style = (WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN) & !WS_MINIMIZEBOX & !WS_MAXIMIZEBOX;
     // WS_EX_TOOLWINDOW을 쓰면 도구창용 작은 캡션이 되므로 일반 네이티브 타이틀바를 유지한다
     let ex_style = if cfg.always_on_top {
         WS_EX_TOPMOST
@@ -797,6 +798,8 @@ unsafe extern "system" fn wnd_proc(
                 w,
                 h,
             );
+            // 구분선(상태바 위·아래 1px)이 새 폭에 맞게 다시 그려지도록
+            let _ = InvalidateRect(hwnd, None, false);
             LRESULT(0)
         }
 
