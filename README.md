@@ -1,4 +1,9 @@
-# key2gksrmf
+
+<p>
+  <img width="50" src="https://raw.githubusercontent.com/noelfania/key2gksrmf/main/doc/images/app-icon.png" alt="key2gksrmf" />
+  <b>key2gksrmf</b>
+</p>
+
 <p >
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-blue" alt="Windows 10/11" />
   <img src="https://img.shields.io/badge/rust-edition%202021-orange" alt="Rust 2021" />
