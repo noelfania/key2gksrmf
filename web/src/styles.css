@@ -23,6 +23,47 @@ body {
   margin-bottom: 20px;
 }
 
+.seo-intro {
+  margin-top: 16px;
+  max-width: 720px;
+}
+
+.seo-heading {
+  margin: 12px 0 6px;
+  font-size: 1.05rem;
+  font-weight: 650;
+  color: #111827;
+}
+
+.seo-intro p {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: #374151;
+}
+
+.seo-intro code,
+.seo-intro kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #f3f4f6;
+}
+
+.seo-footer {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
+  font-size: 0.85rem;
+  color: #6b7280;
+  line-height: 1.5;
+}
+
+.seo-footer p {
+  margin: 0;
+}
+
 .hero-header {
   display: flex;
   justify-content: space-between;

@@ -137,16 +137,25 @@ pub unsafe fn show_context_menu(hwnd: HWND, cfg: &config_store::AppConfig) {
     };
     AppendMenuW(hmenu, startup_flag, IDM_START_WITH_WINDOWS as usize, w!("Start with Windows")).ok();
 
+    // 단축키 허용 서브메뉴
+    let hsubmenu = CreatePopupMenu().unwrap();
     let hotkey_flag = if cfg.global_hotkey_open {
         MF_STRING | MF_CHECKED
     } else {
         MF_STRING
     };
     AppendMenuW(
-        hmenu,
+        hsubmenu,
         hotkey_flag,
         IDM_GLOBAL_HOTKEY as usize,
         w!("Ctrl+Alt+Shift+G (Open Window)"),
+    )
+    .ok();
+    AppendMenuW(
+        hmenu,
+        MF_POPUP | MF_STRING,
+        hsubmenu.0 as usize,
+        w!("Shortcuts"),
     )
     .ok();
 
@@ -156,9 +165,18 @@ pub unsafe fn show_context_menu(hwnd: HWND, cfg: &config_store::AppConfig) {
     let mut pt = POINT::default();
     GetCursorPos(&mut pt).ok();
 
-    // 포커스 설정 없이 팝업을 띄우면 메뉴 바깥 클릭으로 닫히지 않으므로 foreground 설정
+    // 트레이는 보통 화면 우측 하단 — RIGHTALIGN으로 메뉴가 왼쪽로 펼쳐지게 한다
     let _ = SetForegroundWindow(hwnd);
-    let _ = TrackPopupMenu(hmenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hwnd, None);
+    let _ = TrackPopupMenu(
+        hmenu,
+        TPM_BOTTOMALIGN | TPM_RIGHTALIGN,
+        pt.x,
+        pt.y,
+        0,
+        hwnd,
+        None,
+    );
+    // MF_POPUP으로 붙인 서브메뉴는 부모 DestroyMenu 시 함께 해제된다
     DestroyMenu(hmenu).ok();
 }
 

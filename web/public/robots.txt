@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://noelfania.github.io/key2gksrmf/sitemap.xml

@@ -143,7 +143,8 @@ gksrmf를 만들면서 마주한 문제, 검토, 해결 여부를 모아 둔 문
 
 ### 전역 단축키 Ctrl+Alt+Shift+G
 - `RegisterHotKey`로 등록하고 `WM_HOTKEY`에서 창 표시 + 에디터 포커스 처리.
-- 트레이 메뉴 `Ctrl+Alt+Shift+G (Open Window)` 체크로 on/off. 기본은 off (`global_hotkey_open: false`).
+- 트레이 메뉴 `Shortcuts` 서브메뉴 안 `Ctrl+Alt+Shift+G (Open Window)` 체크로 on/off. 기본은 off (`global_hotkey_open: false`).
+- 서브메뉴명이 길면 트레이(우측 하단)에서 왼쪽으로 튀어나오므로 `Shortcuts`로 짧게 하고 `TPM_RIGHTALIGN`을 사용한다.
 - 다른 앱이 조합을 선점해 등록 실패 시 토글에서는 메시지박스로 안내하고, 시작 시에는 조용히 설정을 원복한다.
 
 ## UI 레이아웃·아이콘 보정 (해결)
@@ -154,6 +155,12 @@ gksrmf를 만들면서 마주한 문제, 검토, 해결 여부를 모아 둔 문
 ### 리사이즈 시 레이아웃 깨짐
 - `resize_editor_controls`에서 `HWND_TOP` 대신 `SWP_NOZORDER`로 z-order 변경을 막았다.
 - `WM_SIZE` 후 `InvalidateRect`로 구분선 스트립을 다시 그리게 했다.
+- 리사이즈마다 Wrap/AOT를 Hide/Show 하면 comctl32 v6 테마 체크박스가 깨진다(체크 표시 소실·Wrap 실종·빈 괄호처럼 보임).
+- **해결**: 숨김을 포기하고 `WM_GETMINMAXINFO`로 최소 창 폭을 상태바 필요 폭 이상으로 제한. `DeferWindowPos`로 원자 배치. 부모 `InvalidateRect`는 구분선 1px 스트립만 무효화.
+- 추가 원인: `WM_CTLCOLORBTN`에서 테마 버튼에 커스텀 브러시를 주면 리사이즈 잔상(체크박스 여러 겹·글자 잘림)이 난다. 버튼은 `DefWindowProc`에 맡긴다.
+- **□ 박스 잔상 핵심**: Wrap/AOT 체크박스에 Pretendard를 `WM_SETFONT`로 넣으면, 테마가 체크 표시를 폰트 글리프로 그리려다 Pretendard에 없는 문자가 □□□로 나타난다. 체크박스에는 시스템 폰트를 유지하고, Pretendard는 에디터·ㅎ/A만 사용.
+- 상태바 배경 STATIC 자식을 제거하고 부모 `WM_PAINT`에서 상태바 배경을 직접 칠한다.
+- 매니페스트 `version="6.0.0.0"`은 SxS 어셈블리 ID다. OS 파일 버전 6.10으로 바꾸면 안 된다.
 
 ### 상태바 간격
 - `STATUS_BAR_HEIGHT` 42→34, `STATUS_PAD` 4로 컨트롤 세로 중앙 정렬.

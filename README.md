@@ -36,6 +36,9 @@
 
 **[GitHub Pages](https://noelfania.github.io/key2gksrmf/)** でブラウザ版エディタを試せます。
 
+Type Hangul with physical QWERTY keys — no Korean IME required.  
+한글 자판·IME 없이 영문 키보드로 두벌식 한글 입력（예: `gksrmf` → `한글`）.
+
 - `F1` または `ㅎ / A` で韓/英モード切り替え
 - 物理キー基準の二式ハングル入力（例: `gksrmf` → `한글`）
 - Windows ネイティブ版のダウンロードは下記 Releases を利用

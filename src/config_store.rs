@@ -39,17 +39,67 @@ fn default_word_wrap() -> bool {
     true
 }
 
+pub const DEFAULT_GUTTER_BACKGROUND: &str = "#F0F0F0";
+pub const DEFAULT_LINE_NUMBER: &str = "#6E6E6E";
+pub const DEFAULT_STATUS_BAR: &str = "#F0F0F0";
+pub const DEFAULT_EDITOR_BACKGROUND: &str = "#FFFFFF";
+
 /// UI 색상 설정 ("#RRGGBB"). 없거나 파싱 실패 시 시스템 기본색을 사용한다.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColorConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_gutter_background")]
     pub gutter_background: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_line_number")]
     pub line_number: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_status_bar")]
     pub status_bar: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default = "default_editor_background")]
     pub editor_background: Option<String>,
+}
+
+fn default_gutter_background() -> Option<String> {
+    Some(DEFAULT_GUTTER_BACKGROUND.to_string())
+}
+
+fn default_line_number() -> Option<String> {
+    Some(DEFAULT_LINE_NUMBER.to_string())
+}
+
+fn default_status_bar() -> Option<String> {
+    Some(DEFAULT_STATUS_BAR.to_string())
+}
+
+fn default_editor_background() -> Option<String> {
+    Some(DEFAULT_EDITOR_BACKGROUND.to_string())
+}
+
+impl Default for ColorConfig {
+    fn default() -> Self {
+        ColorConfig {
+            gutter_background: default_gutter_background(),
+            line_number: default_line_number(),
+            status_bar: default_status_bar(),
+            editor_background: default_editor_background(),
+        }
+    }
+}
+
+impl ColorConfig {
+    /// 누락된 색상 키에 기본 HEX를 채운다 (기존 `"colors": {}` 호환).
+    pub fn fill_defaults(&mut self) {
+        if self.gutter_background.is_none() {
+            self.gutter_background = default_gutter_background();
+        }
+        if self.line_number.is_none() {
+            self.line_number = default_line_number();
+        }
+        if self.status_bar.is_none() {
+            self.status_bar = default_status_bar();
+        }
+        if self.editor_background.is_none() {
+            self.editor_background = default_editor_background();
+        }
+    }
 }
 
 /// "#RRGGBB" 형식을 COLORREF 값(0x00BBGGRR)으로 파싱한다. 실패 시 None.
@@ -105,19 +155,34 @@ fn config_path() -> PathBuf {
 }
 
 /// 설정 파일을 로드한다. 파일이 없거나 파싱 실패 시 기본값을 반환한다.
+/// 기본값/복구 시에는 바로 저장해 colors 키가 파일에 보이도록 한다.
 pub fn load() -> AppConfig {
     let path = config_path();
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(_) => return AppConfig::default(),
+        Err(_) => {
+            let cfg = AppConfig::default();
+            let _ = save(&cfg);
+            return cfg;
+        }
     };
     match serde_json::from_str::<AppConfig>(&text) {
-        Ok(cfg) => cfg,
+        Ok(mut cfg) => {
+            // 구버전 `"colors": {}` 등 누락 키를 기본 HEX로 채우고 저장
+            let before = cfg.colors.clone();
+            cfg.colors.fill_defaults();
+            if cfg.colors != before {
+                let _ = save(&cfg);
+            }
+            cfg
+        }
         Err(_) => {
             // 파손된 설정 파일을 백업 후 기본값으로 복구
             let backup = path.with_extension("json.bak");
             let _ = std::fs::rename(&path, &backup);
-            AppConfig::default()
+            let cfg = AppConfig::default();
+            let _ = save(&cfg);
+            cfg
         }
     }
 }
@@ -152,5 +217,52 @@ mod tests {
         assert_eq!(parse_hex_color("#GGGGGG"), None);
         assert_eq!(parse_hex_color("#FFFFFF00"), None);
         assert_eq!(parse_hex_color("white"), None);
+    }
+
+    #[test]
+    fn test_color_config_default_serializes_hex_keys() {
+        let json = serde_json::to_string_pretty(&ColorConfig::default()).unwrap();
+        assert!(json.contains("\"gutter_background\": \"#F0F0F0\""));
+        assert!(json.contains("\"line_number\": \"#6E6E6E\""));
+        assert!(json.contains("\"status_bar\": \"#F0F0F0\""));
+        assert!(json.contains("\"editor_background\": \"#FFFFFF\""));
+    }
+
+    #[test]
+    fn test_fill_defaults_fills_empty_colors() {
+        let mut colors = ColorConfig {
+            gutter_background: None,
+            line_number: None,
+            status_bar: None,
+            editor_background: None,
+        };
+        colors.fill_defaults();
+        assert_eq!(
+            colors.gutter_background.as_deref(),
+            Some(DEFAULT_GUTTER_BACKGROUND)
+        );
+        assert_eq!(colors.line_number.as_deref(), Some(DEFAULT_LINE_NUMBER));
+        assert_eq!(colors.status_bar.as_deref(), Some(DEFAULT_STATUS_BAR));
+        assert_eq!(
+            colors.editor_background.as_deref(),
+            Some(DEFAULT_EDITOR_BACKGROUND)
+        );
+    }
+
+    #[test]
+    fn test_deserialize_empty_colors_object_gets_defaults() {
+        let cfg: AppConfig = serde_json::from_str(
+            r#"{ "always_on_top": false, "colors": {} }"#,
+        )
+        .unwrap();
+        // serde default = 함수가 각 필드에 적용된다
+        assert_eq!(
+            cfg.colors.gutter_background.as_deref(),
+            Some(DEFAULT_GUTTER_BACKGROUND)
+        );
+        assert_eq!(
+            cfg.colors.editor_background.as_deref(),
+            Some(DEFAULT_EDITOR_BACKGROUND)
+        );
     }
 }

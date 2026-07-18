@@ -204,7 +204,7 @@ flowchart TD
 |---|---|
 | 싱글클릭 | 없음 |
 | 더블클릭 | 창 표시(`SW_RESTORE`) 및 포커스 |
-| 우클릭 | Always on Top, Start with Windows, Ctrl+Alt+Shift+G (Open Window), Exit |
+| 우클릭 | Always on Top, Start with Windows, Shortcuts ▸ Ctrl+Alt+Shift+G (Open Window), Exit |
 
 - 아이콘: 라이트/다크 테마별 리소스 (`WM_SETTINGCHANGE` 시 갱신)
 
@@ -212,7 +212,7 @@ flowchart TD
 
 - `RegisterHotKey(hwnd, HOTKEY_ID_OPEN, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, 'G')`
 - `WM_HOTKEY` 수신 시 창 표시(`SW_RESTORE`) + 에디터 포커스 → 즉시 타이핑 가능
-- 트레이 메뉴 `Ctrl+Alt+Shift+G (Open Window)` 체크로 on/off, 기본 **off**
+- 트레이 메뉴 `Shortcuts` 서브메뉴 안 `Ctrl+Alt+Shift+G (Open Window)` 체크로 on/off, 기본 **off**
 - 등록 실패(다른 앱 선점) 시: 토글에서는 메시지박스 안내, 시작 시에는 조용히 설정 원복
 - `AppConfig.global_hotkey_open`에 영속화
 

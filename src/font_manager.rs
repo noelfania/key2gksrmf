@@ -12,16 +12,11 @@ use windows::{
 pub struct EmbeddedFont {
     mem_handle: Option<HANDLE>,
     hfont: HFONT,
-    small_hfont: HFONT,
 }
 
 impl EmbeddedFont {
     pub fn hfont(&self) -> HFONT {
         self.hfont
-    }
-
-    pub fn small_hfont(&self) -> HFONT {
-        self.small_hfont
     }
 }
 
@@ -64,15 +59,6 @@ pub unsafe fn load_embedded_font() -> Option<EmbeddedFont> {
         return None;
     }
 
-    let small_hfont = create_ui_font(-14);
-    if small_hfont == HFONT(0 as _) {
-        let _ = DeleteObject(HGDIOBJ(hfont.0));
-        if mem_handle != HANDLE(0 as _) {
-            let _ = RemoveFontMemResourceEx(mem_handle);
-        }
-        return None;
-    }
-
     Some(EmbeddedFont {
         mem_handle: if mem_handle == HANDLE(0 as _) {
             None
@@ -80,7 +66,6 @@ pub unsafe fn load_embedded_font() -> Option<EmbeddedFont> {
             Some(mem_handle)
         },
         hfont,
-        small_hfont,
     })
 }
 
@@ -94,9 +79,6 @@ pub unsafe fn apply_font_to_control(hwnd: HWND, hfont: HFONT) {
 pub unsafe fn cleanup_embedded_font(font: EmbeddedFont) {
     if font.hfont != HFONT(0 as _) {
         let _ = DeleteObject(HGDIOBJ(font.hfont.0));
-    }
-    if font.small_hfont != HFONT(0 as _) {
-        let _ = DeleteObject(HGDIOBJ(font.small_hfont.0));
     }
     if let Some(handle) = font.mem_handle {
         let _ = RemoveFontMemResourceEx(handle);

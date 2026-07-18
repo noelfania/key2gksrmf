@@ -23,6 +23,7 @@ git push origin v0.1.0
 - 워크플로: [.github/workflows/pages.yml](../.github/workflows/pages.yml)
 - 배포 URL: `https://noelfania.github.io/key2gksrmf/`
 - `main` 브랜치 push 시 자동 배포
+- SEO: `web/index.html`（메타·OG·JSON-LD）, `web/public/robots.txt`·`sitemap.xml`, 영·한 본문은 `web/src/App.tsx`의 `.seo-intro`
 
 로컬 실행/빌드:
 
@@ -32,6 +33,19 @@ npm install
 npm run dev
 npm run build
 ```
+
+### 배포 후 SEO（Google Search Console）
+
+Pages 배포가 끝난 뒤, Google 검색 노출을 위해 아래를 한 번 수행한다.
+
+1. [Google Search Console](https://search.google.com/search-console)에 속성 등록  
+   - URL: `https://noelfania.github.io/key2gksrmf/`
+2. sitemap 제출  
+   - `https://noelfania.github.io/key2gksrmf/sitemap.xml`
+3. URL 검사 → 색인 요청  
+   - 대상: `https://noelfania.github.io/key2gksrmf/`
+
+참고: 색인 반영까지 수일~수주 걸릴 수 있다. SEO 메타·본문 소스는 위「SEO」항목을 참고.
 
 ---
 

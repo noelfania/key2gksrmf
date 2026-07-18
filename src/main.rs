@@ -50,7 +50,6 @@ const HOTKEY_ID_OPEN: i32 = 1;
 // 전역 상태 (Win32 콜백에서 접근하기 위해 전역으로 관리)
 static mut G_HWND_MAIN: HWND = HWND(0 as _);
 static mut G_HWND_EDIT: HWND = HWND(0 as _);
-static mut G_HWND_STATUS_BAR: HWND = HWND(0 as _);
 static mut G_HWND_GUTTER: HWND = HWND(0 as _);
 static mut G_HWND_MODE_HAN: HWND = HWND(0 as _);
 static mut G_HWND_MODE_ENG: HWND = HWND(0 as _);
@@ -291,7 +290,6 @@ unsafe fn toggle_word_wrap(hwnd: HWND) {
     editor_window::set_gutter_target(G_HWND_EDIT);
 
     editor_window::resize_editor_controls(
-        G_HWND_STATUS_BAR,
         G_HWND_MODE_HAN,
         G_HWND_MODE_ENG,
         G_HWND_WRAP_CHECK,
@@ -567,6 +565,11 @@ unsafe fn run() {
         }
     }
 
+    // 상태바 컨트롤이 들어갈 수 있는 최소 외곽 크기로 클램프
+    let (min_win_w, min_win_h) = min_window_size(style, ex_style);
+    let start_w = cfg.window.width.max(min_win_w);
+    let start_h = cfg.window.height.max(min_win_h);
+
     let hwnd = CreateWindowExW(
         ex_style,
         PCWSTR(class_name.as_ptr()),
@@ -574,8 +577,8 @@ unsafe fn run() {
         style,
         start_x,
         start_y,
-        cfg.window.width,
-        cfg.window.height,
+        start_w,
+        start_h,
         hwnd_owner,
         None,
         hinstance,
@@ -612,6 +615,18 @@ unsafe fn run() {
         DispatchMessageW(&msg);
     }
     cleanup_single_instance_mutex();
+}
+
+/// 상태바가 깨지지 않는 최소 외곽 창 크기 (클라이언트 min + 프레임).
+unsafe fn min_window_size(style: WINDOW_STYLE, ex_style: WINDOW_EX_STYLE) -> (i32, i32) {
+    let mut rc = RECT {
+        left: 0,
+        top: 0,
+        right: editor_window::min_client_width(),
+        bottom: editor_window::min_client_height(),
+    };
+    let _ = AdjustWindowRectEx(&mut rc, style, false, ex_style);
+    ((rc.right - rc.left).max(1), (rc.bottom - rc.top).max(1))
 }
 
 unsafe fn save_window_bounds(hwnd: HWND) {
@@ -700,11 +715,9 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
 
-        WM_CTLCOLORBTN | WM_CTLCOLORSTATIC => {
-            let hdc = HDC(wparam.0 as *mut core::ffi::c_void);
-            let _ = SetBkMode(hdc, OPAQUE);
-            let _ = SetBkColor(hdc, editor_window::theme().status_bar);
-            LRESULT(editor_window::status_bar_brush().0 as isize)
+        WM_CTLCOLORBTN => {
+            // 테마 라디오/체크박스는 부모 브러시를 주지 않는다
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
 
         WM_CTLCOLOREDIT => {
@@ -714,11 +727,18 @@ unsafe extern "system" fn wnd_proc(
         }
 
         WM_PAINT => {
-            // 타이틀바↔상태바, 상태바↔에디터 구분선 (상태바 위아래 1px)
+            // 상태바 배경 + 구분선 (STATIC 자식 없이 부모가 직접 그림)
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             let mut rect = RECT::default();
             GetClientRect(hwnd, &mut rect).ok();
+            let status_body = RECT {
+                left: 0,
+                top: 0,
+                right: rect.right,
+                bottom: editor_window::STATUS_BAR_HEIGHT,
+            };
+            FillRect(hdc, &status_body, editor_window::status_bar_brush());
             let top_line = RECT {
                 left: 0,
                 top: 0,
@@ -743,7 +763,6 @@ unsafe extern "system" fn wnd_proc(
                 .map(|cfg| cfg.word_wrap)
                 .unwrap_or(true);
             let controls = editor_window::create_editor_controls(hwnd, word_wrap);
-            G_HWND_STATUS_BAR = controls.hwnd_status_bar;
             G_HWND_GUTTER = controls.hwnd_gutter;
             G_HWND_MODE_HAN = controls.hwnd_mode_han;
             G_HWND_MODE_ENG = controls.hwnd_mode_eng;
@@ -770,25 +789,37 @@ unsafe extern "system" fn wnd_proc(
 
             if let Some(font) = font_manager::load_embedded_font() {
                 let hfont = font.hfont();
-                let small_hfont = font.small_hfont();
                 font_manager::apply_font_to_control(G_HWND_EDIT, hfont);
+                // ㅎ 표시용. 체크박스에는 Pretendard를 넣지 않는다
+                // (테마 체크 글리프가 폰트에 없어 □□□ 로 깨짐)
                 font_manager::apply_font_to_control(G_HWND_MODE_HAN, hfont);
                 font_manager::apply_font_to_control(G_HWND_MODE_ENG, hfont);
-                font_manager::apply_font_to_control(G_HWND_WRAP_CHECK, small_hfont);
-                font_manager::apply_font_to_control(G_HWND_TOPMOST_CHECK, small_hfont);
                 G_EMBEDDED_FONT = Some(font);
-                // WM_SETFONT가 포맷 영역을 재계산하므로 여백 재적용
                 editor_window::apply_editor_padding(G_HWND_EDIT);
                 editor_window::invalidate_gutter();
             }
             LRESULT(0)
         }
 
+        WM_GETMINMAXINFO => {
+            // 상태바(ㅎ/A + Wrap + Always on Top)가 겹치지 않는 최소 트랙 크기
+            let style = WINDOW_STYLE(GetWindowLongW(hwnd, GWL_STYLE) as u32);
+            let ex_style = WINDOW_EX_STYLE(GetWindowLongW(hwnd, GWL_EXSTYLE) as u32);
+            let (min_w, min_h) = min_window_size(style, ex_style);
+            let mmi = &mut *(lparam.0 as *mut MINMAXINFO);
+            mmi.ptMinTrackSize.x = min_w;
+            mmi.ptMinTrackSize.y = min_h;
+            LRESULT(0)
+        }
+
         WM_SIZE => {
+            // 최소화 중에는 레이아웃하지 않는다
+            if wparam.0 as u32 == SIZE_MINIMIZED {
+                return LRESULT(0);
+            }
             let w = (lparam.0 & 0xFFFF) as i32;
             let h = ((lparam.0 >> 16) & 0xFFFF) as i32;
             editor_window::resize_editor_controls(
-                G_HWND_STATUS_BAR,
                 G_HWND_MODE_HAN,
                 G_HWND_MODE_ENG,
                 G_HWND_WRAP_CHECK,
@@ -798,8 +829,14 @@ unsafe extern "system" fn wnd_proc(
                 w,
                 h,
             );
-            // 구분선(상태바 위·아래 1px)이 새 폭에 맞게 다시 그려지도록
-            let _ = InvalidateRect(hwnd, None, false);
+            // 상태바 배경·구분선 영역만 다시 그림
+            let status = RECT {
+                left: 0,
+                top: 0,
+                right: w,
+                bottom: editor_window::STATUS_BAR_HEIGHT,
+            };
+            let _ = InvalidateRect(hwnd, Some(&status), false);
             LRESULT(0)
         }
 

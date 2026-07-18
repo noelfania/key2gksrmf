@@ -26,7 +26,21 @@ pub const IDC_MODE_HAN: u32 = 2002;
 pub const IDC_MODE_ENG: u32 = 2003;
 pub const IDC_WORD_WRAP_CHECK: u32 = 2004;
 const WRAP_CHECK_WIDTH: i32 = 70;
-const AOT_CHECK_WIDTH: i32 = 140;
+// "Always on Top" + 체크박스 여유 (140이면 글자가 Wrap 위로 넘침)
+const AOT_CHECK_WIDTH: i32 = 170;
+const STATUS_GAP: i32 = 8;
+// ㅎ/A 라디오 오른쪽 끝 + 여백
+const STATUS_LEFT_ZONE_END: i32 = EDIT_OUTER_MARGIN + 48 + 40 + STATUS_GAP;
+
+/// 상태바 컨트롤이 겹치지 않는 최소 클라이언트 폭.
+pub fn min_client_width() -> i32 {
+    STATUS_LEFT_ZONE_END + WRAP_CHECK_WIDTH + STATUS_GAP + AOT_CHECK_WIDTH + EDIT_OUTER_MARGIN
+}
+
+/// 에디터·상태바가 쓸 수 있는 최소 클라이언트 높이.
+pub fn min_client_height() -> i32 {
+    STATUS_BAR_HEIGHT + 120
+}
 const GUTTER_CLASS: PCWSTR = w!("k2g_gutter");
 // 에디터 첫 행이 상태바 구분선에 붙지 않도록 주는 내부 여백
 const EDITOR_PADDING_TOP: i32 = 6;
@@ -49,7 +63,6 @@ static mut G_GUTTER_EDIT: HWND = HWND(0 as _);
 pub struct Theme {
     pub line_number: COLORREF,
     pub line_number_current: COLORREF,
-    pub status_bar: COLORREF,
     pub editor_bg: COLORREF,
     gutter_brush: HBRUSH,
     status_brush: HBRUSH,
@@ -78,7 +91,6 @@ pub unsafe fn init_theme(colors: &config_store::ColorConfig) {
     G_THEME = Some(Theme {
         line_number,
         line_number_current,
-        status_bar,
         editor_bg,
         gutter_brush: CreateSolidBrush(gutter_bg),
         status_brush: CreateSolidBrush(status_bar),
@@ -116,32 +128,12 @@ pub unsafe fn cleanup_theme() {
 }
 
 pub struct EditorControls {
-    pub hwnd_status_bar: HWND,
     pub hwnd_mode_han: HWND,
     pub hwnd_mode_eng: HWND,
     pub hwnd_wrap_check: HWND,
     pub hwnd_topmost_check: HWND,
     pub hwnd_gutter: HWND,
     pub hwnd_edit: HWND,
-}
-
-unsafe fn create_status_bar(parent: HWND, hinstance: HINSTANCE) -> HWND {
-    // 위아래 1px는 메인 창이 구분선(타이틀바↔상태바, 상태바↔에디터)을 그린다
-    CreateWindowExW(
-        WINDOW_EX_STYLE(0),
-        w!("STATIC"),
-        None,
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        0,
-        1,
-        1,
-        STATUS_BAR_HEIGHT - 2,
-        parent,
-        None,
-        hinstance,
-        None,
-    )
-    .unwrap_or(HWND(0 as _))
 }
 
 unsafe fn create_mode_han_radio(parent: HWND, hinstance: HINSTANCE) -> HWND {
@@ -543,7 +535,8 @@ pub unsafe fn create_editor_controls(parent: HWND, word_wrap: bool) -> EditorCon
     GetClientRect(parent, &mut rect).ok();
     let hinstance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
 
-    let hwnd_status_bar = create_status_bar(parent, hinstance);
+    // 상태바 배경은 STATIC 없이 부모 WM_PAINT에서 그린다
+    // (STATIC + 테마 체크박스 형제 페인팅이 리사이즈 잔상을 만든다)
     let hwnd_gutter = create_line_gutter(parent, hinstance);
     let hedit = create_edit_control(
         parent,
@@ -559,7 +552,6 @@ pub unsafe fn create_editor_controls(parent: HWND, word_wrap: bool) -> EditorCon
     let hwnd_topmost_check = create_topmost_checkbox(parent, hinstance);
 
     EditorControls {
-        hwnd_status_bar,
         hwnd_mode_han,
         hwnd_mode_eng,
         hwnd_wrap_check,
@@ -570,8 +562,9 @@ pub unsafe fn create_editor_controls(parent: HWND, word_wrap: bool) -> EditorCon
 }
 
 /// 상태바와 에디터 컨트롤 크기를 새 클라이언트 영역에 맞게 조정한다.
+///
+/// 최소 폭은 WM_GETMINMAXINFO로 막는다. DeferWindowPos로 원자 배치한다.
 pub unsafe fn resize_editor_controls(
-    hwnd_status_bar: HWND,
     hwnd_mode_han: HWND,
     hwnd_mode_eng: HWND,
     hwnd_wrap_check: HWND,
@@ -581,101 +574,85 @@ pub unsafe fn resize_editor_controls(
     width: i32,
     height: i32,
 ) {
-    if hwnd_status_bar != HWND(0 as _) {
-        SetWindowPos(
-            hwnd_status_bar,
-            None,
-            0,
-            1,
-            width.max(1),
-            STATUS_BAR_HEIGHT - 2,
-            SWP_NOZORDER,
-        )
-        .ok();
-    }
-
+    let width = width.max(1);
+    let height = height.max(1);
     let control_h = (STATUS_BAR_HEIGHT - STATUS_PAD * 2).max(16);
+    let aot_x = (width - AOT_CHECK_WIDTH - EDIT_OUTER_MARGIN).max(STATUS_LEFT_ZONE_END);
+    let wrap_x = (aot_x - WRAP_CHECK_WIDTH - STATUS_GAP).max(STATUS_LEFT_ZONE_END);
+    let edit_h = (height - STATUS_BAR_HEIGHT).max(1);
+    let edit_w = (width - GUTTER_WIDTH).max(1);
 
-    if hwnd_mode_han != HWND(0 as _) {
-        SetWindowPos(
-            hwnd_mode_han,
-            None,
-            EDIT_OUTER_MARGIN,
-            STATUS_PAD,
-            40,
-            control_h,
-            SWP_NOZORDER,
-        )
-        .ok();
+    let Ok(mut hdwp) = BeginDeferWindowPos(6) else {
+        return;
+    };
+
+    // 실패 시 HDWP는 무효이므로 즉시 중단한다
+    macro_rules! defer {
+        ($hwnd:expr, $x:expr, $y:expr, $cx:expr, $cy:expr, $flags:expr) => {
+            if $hwnd != HWND(0 as _) {
+                match DeferWindowPos(hdwp, $hwnd, HWND(0 as _), $x, $y, $cx, $cy, $flags) {
+                    Ok(next) => hdwp = next,
+                    Err(_) => return,
+                }
+            }
+        };
     }
 
-    if hwnd_mode_eng != HWND(0 as _) {
-        SetWindowPos(
-            hwnd_mode_eng,
-            None,
-            EDIT_OUTER_MARGIN + 48,
-            STATUS_PAD,
-            40,
-            control_h,
-            SWP_NOZORDER,
-        )
-        .ok();
-    }
+    defer!(
+        hwnd_mode_han,
+        EDIT_OUTER_MARGIN,
+        STATUS_PAD,
+        40,
+        control_h,
+        SWP_NOZORDER | SWP_NOACTIVATE
+    );
+    defer!(
+        hwnd_mode_eng,
+        EDIT_OUTER_MARGIN + 48,
+        STATUS_PAD,
+        40,
+        control_h,
+        SWP_NOZORDER | SWP_NOACTIVATE
+    );
+    defer!(
+        hwnd_wrap_check,
+        wrap_x,
+        STATUS_PAD,
+        WRAP_CHECK_WIDTH,
+        control_h,
+        SWP_NOZORDER | SWP_NOACTIVATE
+    );
+    defer!(
+        hwnd_topmost_check,
+        aot_x,
+        STATUS_PAD,
+        AOT_CHECK_WIDTH,
+        control_h,
+        SWP_NOZORDER | SWP_NOACTIVATE
+    );
+    defer!(
+        hwnd_gutter,
+        0,
+        STATUS_BAR_HEIGHT,
+        GUTTER_WIDTH,
+        edit_h,
+        SWP_NOZORDER | SWP_NOACTIVATE
+    );
+    defer!(
+        hwnd_edit,
+        GUTTER_WIDTH,
+        STATUS_BAR_HEIGHT,
+        edit_w,
+        edit_h,
+        SWP_NOZORDER | SWP_NOACTIVATE
+    );
 
-    if hwnd_topmost_check != HWND(0 as _) {
-        SetWindowPos(
-            hwnd_topmost_check,
-            None,
-            (width - AOT_CHECK_WIDTH - EDIT_OUTER_MARGIN).max(EDIT_OUTER_MARGIN),
-            STATUS_PAD,
-            AOT_CHECK_WIDTH,
-            control_h,
-            SWP_NOZORDER,
-        )
-        .ok();
-    }
-
-    if hwnd_wrap_check != HWND(0 as _) {
-        let wrap_x = (width - AOT_CHECK_WIDTH - WRAP_CHECK_WIDTH - EDIT_OUTER_MARGIN * 2)
-            .max(EDIT_OUTER_MARGIN);
-        SetWindowPos(
-            hwnd_wrap_check,
-            None,
-            wrap_x,
-            STATUS_PAD,
-            WRAP_CHECK_WIDTH,
-            control_h,
-            SWP_NOZORDER,
-        )
-        .ok();
-    }
+    let _ = EndDeferWindowPos(hdwp);
 
     if hwnd_gutter != HWND(0 as _) {
-        SetWindowPos(
-            hwnd_gutter,
-            None,
-            0,
-            STATUS_BAR_HEIGHT,
-            GUTTER_WIDTH,
-            (height - STATUS_BAR_HEIGHT).max(1),
-            SWP_NOZORDER,
-        )
-        .ok();
         let _ = InvalidateRect(hwnd_gutter, None, true);
     }
-
     if hwnd_edit != HWND(0 as _) {
-        SetWindowPos(
-            hwnd_edit,
-            None,
-            GUTTER_WIDTH,
-            STATUS_BAR_HEIGHT,
-            (width - GUTTER_WIDTH).max(1),
-            (height - STATUS_BAR_HEIGHT).max(1),
-            SWP_NOZORDER,
-        )
-        .ok();
-        // WM_SIZE로 포맷 영역이 초기화되므로 여백을 다시 적용
         apply_editor_padding(hwnd_edit);
     }
 }

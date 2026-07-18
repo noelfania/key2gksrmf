@@ -120,7 +120,7 @@ alwaysApply: true
 
 - **싱글클릭**: 동작 없음
 - **더블클릭**: 창 표시 및 포커스
-- **우클릭**: 컨텍스트 메뉴 — 항상 위, Windows 시작 시 기동, 전역 단축키(Ctrl+Alt+Shift+G 창 열기, 기본 off), 종료
+- **우클릭**: 컨텍스트 메뉴 — 항상 위, Windows 시작 시 기동, Shortcuts(하위: Ctrl+Alt+Shift+G 창 열기, 기본 off), 종료
 
 ### 3.5 복사·붙여넣기
 
