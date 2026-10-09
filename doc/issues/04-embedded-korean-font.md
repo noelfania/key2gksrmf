@@ -1,7 +1,7 @@
 # 한글 폰트 내장
 
 - **상태**: 해결
-- **관련 계획**: `.cursor/plans/embedded-korean-font_7914d67e.plan.md`
+- **관련 계획**: (완료·정리됨 — 본 문서가 기록)
 - **관련 코드**: `src/font_manager.rs`, `assets/fonts/`, `src/main.rs`
 
 ## 고민한 점
@@ -21,7 +21,8 @@
 ## 결정
 
 - **Pretendard Regular** 1파일을 `assets/fonts/`에 포함 (OFL, 약 2.6MB).
-- `AddFontMemResourceEx`로 메모리 등록 후 `WM_SETFONT`로 `EDIT`, 한/영 버튼, 항상 위 체크박스에 적용.
+- `AddFontMemResourceEx`로 메모리 등록 후 `WM_SETFONT`로 `EDIT`, `ㅎ`/`A` 라디오에 적용.
+- Wrap·Always on Top 체크박스는 시스템 폰트를 유지한다 (테마 체크 글리프가 Pretendard에 없어 □로 보이는 문제 방지).
 - `OFL.txt` 라이선스 고지 포함.
 - 등록 실패 시 Windows 기본 폰트 fallback으로 계속 동작.
 

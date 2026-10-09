@@ -6,7 +6,7 @@
 
 - **아이디어**: 개행 위치에 줄 끝 기호(¶ 등)를 보여 주기.
 - **판단**: Win32 기본 `EDIT`만으로는 자연스럽게 구현하기 어렵다.
-- **후속**: RichEdit, Scintilla, 커스텀 렌더링 검토 시 재논의. (`doc/upcoming-release-note.md`에 기록)
+- **후속**: RichEdit, Scintilla, 커스텀 렌더링 검토 시 재논의.
 
 ## 시스템 폰트 설정 UI
 

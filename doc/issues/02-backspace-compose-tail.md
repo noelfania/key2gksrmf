@@ -1,7 +1,7 @@
 # 백스페이스: 조합 tail 분리
 
 - **상태**: 해결
-- **관련 계획**: `.cursor/plans/backspace_composition_fix_8f6d3260.plan.md`
+- **관련 계획**: (완료·정리됨 — 본 문서가 기록)
 - **관련 코드**: `src/hangul_engine.rs` (`ComposerStep`, `pop_key`), `src/main.rs`
 
 ## 고민한 점

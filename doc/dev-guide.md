@@ -11,11 +11,12 @@
 워크플로: [.github/workflows/release.yml](../.github/workflows/release.yml)
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+# 예: Cargo.toml version 이 0.1.1226 이면
+git tag v0.1.1226
+git push origin v0.1.1226
 ```
 
-- `Cargo.toml`의 `version`과 태그(`v0.1.0`)는 맞춰 둡니다.
+- `Cargo.toml`의 `version`과 태그(`vX.Y.Z`)는 맞춰 둡니다.
 - Releases에는 `key2gksrmf-v*-win64.zip`만 올립니다（Edge SmartScreen으로 exe 단독 다운로드가 막히는 경우가 있어 zip만 배포）.
 
 ## GitHub Pages (웹 데모)

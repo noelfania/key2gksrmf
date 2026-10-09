@@ -1,7 +1,7 @@
 # 입력 모델: 물리키 기반 한글 조합
 
 - **상태**: 해결
-- **관련 계획**: `.cursor/plans/physical_key_input_1b0fdef8.plan.md`
+- **관련 계획**: (완료·정리됨 — 본 문서가 기록)
 - **관련 코드**: `src/main.rs` (`edit_proc`), `src/hangul_engine.rs` (`HangulComposer`)
 
 ## 고민한 점

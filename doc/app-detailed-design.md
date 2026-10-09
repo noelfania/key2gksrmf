@@ -2,7 +2,7 @@
 
 > 대상: Windows 10/11 Win32 네이티브 단일 프로세스 트레이 앱
 >
-> 기준: 현재 구현 상태 (v0.1.0)
+> 기준: 현재 구현 상태 (`Cargo.toml` version)
 >
 > **서비스사양**: [.cursor/rules/project-standards.mdc](../.cursor/rules/project-standards.mdc)
 
@@ -19,9 +19,10 @@
 ### 1.2 In-Scope
 
 - 입력 창 포커스 안에서 `WM_KEYDOWN` 물리키 → 두벌식 한글 완성형 조합
-- 한/영 모드 전환 (상태바 클릭, F1)
+- 한/영 모드 전환 (상태바 `ㅎ`/`A` 클릭, F1)
 - 상태바 Wrap 체크박스(Alt+Z), Always on Top 체크박스, 트레이 컨텍스트 메뉴
 - 설정 영속화(JSON), 창 위치·크기 저장, 시작 프로그램 레지스트리 동기화
+- 단일 인스턴스(mutex), 전역 단축키 Ctrl+Alt+Shift+G 창 열기(기본 off)
 - 내장 한글 폰트 (Pretendard Regular)
 - Windows 표준 Unicode 클립보드 복사/붙여넣기
 
@@ -71,6 +72,7 @@
 ### 2.5 폰트
 
 - Pretendard Regular를 `include_bytes`로 내장, `AddFontMemResourceEx` 등록 후 `WM_SETFONT` 적용.
+- 적용 대상: 에디터(`EDIT`), 한/영 라디오(`ㅎ`/`A`). Wrap·Always on Top 체크박스는 시스템 폰트 유지(테마 체크 글리프 □ 잔상 방지).
 - 등록 실패 시 시스템 기본 폰트 fallback.
 
 ---
@@ -79,21 +81,24 @@
 
 ```mermaid
 flowchart LR
-    main[main.rs] --> trayManager[tray_manager]
+    main[main.rs] --> appInfo[app_info]
+    main --> trayManager[tray_manager]
     main --> editorWindow[editor_window]
     main --> configStore[config_store]
     main --> startupRegistry[startup_registry]
     main --> fontManager[font_manager]
     main --> hangulEngine[hangul_engine]
     trayManager --> configStore
+    trayManager --> appInfo
     editorWindow --> main
 ```
 
 | 모듈 | 파일 | 역할 |
 |---|---|---|
-| 앱 진입점 | `src/main.rs` | `wnd_proc`, `edit_proc`, 메시지 루프, 전역 상태, F1 토글 |
+| 앱 진입점 | `src/main.rs` | `wnd_proc`, `edit_proc`, 메시지 루프, 전역 상태, F1 토글, 단일 인스턴스 |
+| 앱 식별자 | `src/app_info.rs` | 앱 이름, 창/owner 클래스, mutex 이름, 타이틀 문자열 |
 | 트레이 | `src/tray_manager.rs` | 아이콘 등록, 테마별 아이콘, 컨텍스트 메뉴, 창 표시/포커스 |
-| 에디터 창 | `src/editor_window.rs` | 메인 창 자식 컨트롤 생성·리사이즈, 항상 위 적용 |
+| 에디터 창 | `src/editor_window.rs` | 메인 창 자식 컨트롤·거터 생성·리사이즈, 항상 위 적용 |
 | 한글 엔진 | `src/hangul_engine.rs` | `HangulComposer`, `convert_eng_to_kor`, 조합 테이블 |
 | 설정 | `src/config_store.rs` | `config.json` 로드/저장 |
 | 시작 프로그램 | `src/startup_registry.rs` | `HKCU\...\Run` 등록/해제 |
@@ -107,7 +112,9 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    boot[ProcessStart] --> loadConfig[LoadAppConfig]
+    boot[ProcessStart] --> singleInstance{AcquireMutex}
+    singleInstance -->|AlreadyExists| focusExisting[FocusExistingWindowAndExit]
+    singleInstance -->|Ok| loadConfig[LoadAppConfig]
     loadConfig --> syncRegistry[SyncStartupRegistry]
     syncRegistry --> createOwner[CreateInvisibleOwnerWindow]
     createOwner --> createMain[CreateMainWindowAndControls]
@@ -119,6 +126,7 @@ flowchart TD
     eventLoop -->|TrayDoubleClick| focusWindow[ShowOrFocusWindow]
     eventLoop -->|TrayRightClick| openMenu[OpenContextMenu]
     eventLoop -->|F1| toggleMode[ToggleHanEngMode]
+    eventLoop -->|WM_HOTKEY| focusWindow
     eventLoop -->|WM_CLOSE| hideWindow[HideAndSaveBounds]
     openMenu -->|Exit| shutdown[CleanupAndQuit]
 
@@ -126,6 +134,7 @@ flowchart TD
     toggleMode --> eventLoop
     hideWindow --> eventLoop
     shutdown --> endNode[ProcessExit]
+    focusExisting --> endNode
 ```
 
 ---
@@ -138,7 +147,10 @@ flowchart TD
 - 최초 실행: 창 표시 + 에디터 포커스
 - 닫기·최소화: 트레이로 숨김 (종료 아님), 위치·크기 저장
 - 작업 표시줄: 미표시 (invisible owner 창 패턴)
-- 리사이즈: `WS_THICKFRAME`, 에디터 외곽 8px 마진
+- 리사이즈: `WS_THICKFRAME`, 거터·에디터는 창 가장자리까지 여백 없이 배치
+- 최소 창 폭: 상태바 컨트롤이 겹치지 않도록 `WM_GETMINMAXINFO`로 제한
+- 타이틀: `key2gksrmf 64bit {version}` (`app_info::window_title`)
+- 단일 인스턴스: mutex `Local\\key2gksrmf_single_instance`
 
 ### 5.2 상태바 (높이 34px)
 
@@ -343,15 +355,16 @@ cargo build --release
 
 | 관심사 | 파일 |
 |---|---|
-| 앱 시작점·입력 라우팅 | `src/main.rs` |
+| 앱 시작점·입력 라우팅·단일 인스턴스 | `src/main.rs` |
+| 앱 이름·창 클래스·타이틀 | `src/app_info.rs` |
 | 트레이 | `src/tray_manager.rs` |
-| 입력 창·상태바 | `src/editor_window.rs` |
+| 입력 창·상태바·거터 | `src/editor_window.rs` |
 | 한글 엔진 | `src/hangul_engine.rs` |
 | 설정 | `src/config_store.rs` |
 | 시작 프로그램 | `src/startup_registry.rs` |
 | 내장 폰트 | `src/font_manager.rs` |
 | 폰트 에셋 | `assets/fonts/Pretendard-Regular.ttf`, `OFL.txt` |
-| 아이콘 | `assets/` (빌드 시 embed-resource) |
+| 아이콘·매니페스트 | `assets/icons/`, `assets/app.manifest` (빌드 시 embed-resource) |
 
 ---
 

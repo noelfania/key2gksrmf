@@ -1,7 +1,7 @@
 # Unicode·클립보드와 UTF-8
 
 - **상태**: 검토 (정책 확정, 별도 UTF-8 복사 기능은 미구현)
-- **관련 문서**: `doc/app-detailed-design.md` §2.3, `doc/upcoming-release-note.md`
+- **관련 문서**: `doc/app-detailed-design.md` §2.4
 
 ## 고민한 점
 
