@@ -4,6 +4,7 @@ use windows::{
     core::*,
     Win32::{
         Foundation::*,
+        System::LibraryLoader::{GetProcAddress, LoadLibraryW},
         System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD},
     },
 };
@@ -101,6 +102,39 @@ pub fn caption_is_dark() -> bool {
         }
     }
     false
+}
+
+// uxtheme 비공개 API (Windows 10 1903+). 실패하면 메뉴만 라이트로 남는다.
+const UXTHEME_SET_PREFERRED_APP_MODE: u16 = 135;
+const UXTHEME_FLUSH_MENU_THEMES: u16 = 136;
+const APP_MODE_ALLOW_DARK: i32 = 1;
+
+unsafe fn uxtheme_ordinal(ordinal: u16) -> Option<unsafe extern "system" fn() -> isize> {
+    let module = LoadLibraryW(w!("uxtheme.dll")).ok()?;
+    GetProcAddress(module, PCSTR(ordinal as usize as *const u8))
+}
+
+/// 트레이 컨텍스트 메뉴 같은 Win32 팝업 메뉴가 시스템 앱 테마(다크)를 따르게 한다.
+pub unsafe fn allow_dark_menus() {
+    if let Some(f) = uxtheme_ordinal(UXTHEME_SET_PREFERRED_APP_MODE) {
+        let set_preferred_app_mode: unsafe extern "system" fn(i32) -> i32 = std::mem::transmute(f);
+        let mut mode = APP_MODE_ALLOW_DARK;
+        // 디버그 빌드 확인용: KEY2GKSRMF_THEME=dark 이면 메뉴도 강제로 다크 (ForceDark = 2)
+        #[cfg(debug_assertions)]
+        if std::env::var("KEY2GKSRMF_THEME").is_ok_and(|v| v == "dark") {
+            mode = 2;
+        }
+        set_preferred_app_mode(mode);
+    }
+    flush_menu_themes();
+}
+
+/// 테마 변경 후 메뉴 테마 캐시를 비운다.
+pub unsafe fn flush_menu_themes() {
+    if let Some(f) = uxtheme_ordinal(UXTHEME_FLUSH_MENU_THEMES) {
+        let flush: unsafe extern "system" fn() = std::mem::transmute(f);
+        flush();
+    }
 }
 
 /// WM_SETTINGCHANGE의 lparam이 테마 변경("ImmersiveColorSet")인지

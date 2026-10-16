@@ -350,6 +350,7 @@ unsafe fn apply_theme(hwnd: HWND) {
     }
     editor_window::apply_control_theme(G_HWND_EDIT);
     editor_window::refresh_toolbar_theme();
+    system_theme::flush_menu_themes();
     let _ = RedrawWindow(
         hwnd,
         None,
@@ -434,6 +435,7 @@ unsafe fn run() {
     let dark = !system_theme::apps_are_light();
     editor_window::init_theme(&cfg, dark, system_theme::control_accent_color(dark));
     G_WM_TASKBAR_CREATED = RegisterWindowMessageW(w!("TaskbarCreated"));
+    system_theme::allow_dark_menus();
 
     let hinstance: HINSTANCE = GetModuleHandleW(None).unwrap().into();
 
