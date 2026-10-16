@@ -87,7 +87,7 @@ key2gksrmf를 만들면서 마주한 문제, 검토, 해결 여부를 모아 둔
 - `WM_CTLCOLORBTN`에서 테마 버튼에 커스텀 브러시를 주지 않음.
 - Wrap/AOT 체크박스에는 Pretendard를 넣지 않음(체크 □ 잔상). Pretendard는 에디터·ㅎ/A만.
 - 상태바 배경 STATIC 자식 제거 → 부모 `WM_PAINT`에서 칠함.
-- 아이콘: `key2gksrmf_light.ico` / `key2gksrmf_dark.ico`, `doc/images/app-icon.png`.
+- 아이콘: `key2gksrmf_light.ico`(검은 '나') / `key2gksrmf_dark.ico`(흰 '나'), `doc/images/app-icon.png` / `app-icon-dark.png`. 원본은 `assets/icons/key2gksrmf-na-source.png`.
 
 ### 물리키 입력 전환 후 남은 확인
 

@@ -1,6 +1,9 @@
 
 <p>
-  <img width="50" src="https://raw.githubusercontent.com/noelfania/key2gksrmf/main/doc/images/app-icon.png" alt="key2gksrmf" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/noelfania/key2gksrmf/main/doc/images/app-icon-dark.png" />
+    <img width="50" src="https://raw.githubusercontent.com/noelfania/key2gksrmf/main/doc/images/app-icon.png" alt="key2gksrmf" />
+  </picture>
   <b>key2gksrmf</b>
 </p>
 
