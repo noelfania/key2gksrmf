@@ -15,6 +15,7 @@ use windows::{
 };
 
 use crate::config_store;
+use crate::input_controller::TextBuffer;
 
 pub const EDIT_OUTER_MARGIN: i32 = 8;
 pub const STATUS_BAR_HEIGHT: i32 = 34;
@@ -53,6 +54,56 @@ const EM_SETRECT: u32 = 0x00B3;
 const EM_GETLINECOUNT: u32 = 0x00BA;
 const EM_LINEINDEX: u32 = 0x00BB;
 const EM_GETFIRSTVISIBLELINE: u32 = 0x00CE;
+const EM_SETSEL_RAW: u32 = 0x00B1;
+const EM_REPLACESEL_RAW: u32 = 0x00C2;
+const EM_SETLIMITTEXT_RAW: u32 = 0x00C5;
+
+/// 실제 EDIT 컨트롤을 입력 컨트롤러의 TextBuffer로 감싼다.
+pub struct EditBuffer(pub HWND);
+
+impl TextBuffer for EditBuffer {
+    fn text_utf16(&self) -> Vec<u16> {
+        unsafe {
+            let len = GetWindowTextLengthW(self.0) as usize;
+            let mut buf: Vec<u16> = vec![0u16; len + 1];
+            let copied = GetWindowTextW(self.0, &mut buf) as usize;
+            buf.truncate(copied.min(len));
+            buf
+        }
+    }
+
+    fn selection(&self) -> (u32, u32) {
+        let mut start = 0u32;
+        let mut end = 0u32;
+        unsafe {
+            SendMessageW(
+                self.0,
+                EM_GETSEL_RAW,
+                WPARAM(&mut start as *mut _ as usize),
+                LPARAM(&mut end as *mut _ as isize),
+            );
+        }
+        (start, end)
+    }
+
+    fn set_selection(&mut self, start: u32, end: u32) {
+        unsafe {
+            SendMessageW(self.0, EM_SETSEL_RAW, WPARAM(start as usize), LPARAM(end as isize));
+        }
+    }
+
+    fn replace_selection(&mut self, text: &str) {
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            SendMessageW(
+                self.0,
+                EM_REPLACESEL_RAW,
+                WPARAM(1),
+                LPARAM(wide.as_ptr() as isize),
+            );
+        }
+    }
+}
 
 // 거터가 참조하는 에디터 핸들 (단일 인스턴스 앱이므로 모듈 전역으로 관리)
 static mut G_GUTTER_HWND: HWND = HWND(0 as _);
@@ -507,6 +558,8 @@ pub unsafe fn create_edit_control(
         None,
     )
     .unwrap_or(HWND(0 as _));
+    // 기본 입력 한도(32,767자)를 해제한다 (0 = 최대)
+    SendMessageW(hwnd, EM_SETLIMITTEXT_RAW, WPARAM(0), LPARAM(0));
     apply_editor_padding(hwnd);
     hwnd
 }

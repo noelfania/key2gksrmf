@@ -9,6 +9,7 @@ mod config_store;
 mod editor_window;
 mod font_manager;
 mod hangul_engine;
+mod input_controller;
 mod startup_registry;
 mod tray_manager;
 mod app_info;
@@ -21,8 +22,8 @@ use windows::{
         System::{LibraryLoader::GetModuleHandleW, Threading::CreateMutexW},
         UI::{
             Input::KeyboardAndMouse::{
-                GetAsyncKeyState, RegisterHotKey, SetFocus, UnregisterHotKey, MOD_ALT,
-                MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_CONTROL, VK_SHIFT,
+                GetKeyState, RegisterHotKey, SetFocus, UnregisterHotKey, MOD_ALT,
+                MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VIRTUAL_KEY, VK_CONTROL, VK_SHIFT,
             },
             Shell::*,
             WindowsAndMessaging::*,
@@ -30,16 +31,15 @@ use windows::{
     },
 };
 
+use input_controller::{InputController, InputMode, KeyEvent, KeyResult};
 use tray_manager::{
     IDM_ALWAYS_ON_TOP, IDM_EXIT, IDM_GLOBAL_HOTKEY, IDM_START_WITH_WINDOWS, WM_TRAY,
 };
 
 // EditControl 메시지 상수 (windows 크레이트 미노출)
 const EM_GETSEL: u32 = 0x00B0;
-const EM_REPLACESEL: u32 = 0x00C2;
 const EM_SETSEL: u32 = 0x00B1;
 const EM_SCROLLCARET: u32 = 0x00B7;
-const VK_BACKSPACE: u32 = 0x08;
 const VK_F1: u32 = 0x70;
 const BST_UNCHECKED_RAW: usize = 0;
 const BST_CHECKED_RAW: usize = 1;
@@ -60,79 +60,14 @@ static mut G_NOTIFY_ICON_DATA: Option<NOTIFYICONDATAW> = None;
 static mut G_EMBEDDED_FONT: Option<font_manager::EmbeddedFont> = None;
 static mut G_SINGLE_INSTANCE_MUTEX: Option<HANDLE> = None;
 
-// 물리키 기반 조합 상태
-static mut G_COMPOSER: Option<hangul_engine::HangulComposer> = None;
-static mut G_COMPOSE_START: Option<u32> = None;
-static mut G_COMPOSE_LEN_UTF16: u32 = 0;
-static mut G_SUPPRESS_NEXT_WM_CHAR: bool = false;
+// 물리키 기반 조합 상태 (모드·조합 추적·WM_CHAR 억제)
+static mut G_INPUT: Option<InputController> = None;
 
 // 에디터 컨트롤의 원본 WndProc 보관용
 static mut G_ORIG_EDIT_PROC: WNDPROC = None;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InputMode {
-    Han,
-    Eng,
-}
-
-static mut G_INPUT_MODE: InputMode = InputMode::Han;
-
-fn utf16_len(s: &str) -> u32 {
-    s.encode_utf16().count() as u32
-}
-
-fn map_physical_key_to_eng(vk: u32, shift: bool) -> Option<char> {
-    if !(u32::from(b'A')..=u32::from(b'Z')).contains(&vk) {
-        return None;
-    }
-
-    let base = char::from_u32(vk)?.to_ascii_lowercase();
-    let mapped = if shift {
-        match base {
-            'r' | 'e' | 'q' | 't' | 'w' | 'o' | 'p' => base.to_ascii_uppercase(),
-            _ => base,
-        }
-    } else {
-        base
-    };
-
-    Some(mapped)
-}
-
-fn is_modifier_key(vk: u32) -> bool {
-    vk == VK_SHIFT.0 as u32 || vk == VK_CONTROL.0 as u32
-}
-
-fn is_word_boundary(ch: char) -> bool {
-    ch.is_whitespace()
-        || ch.is_ascii_punctuation()
-        || matches!(ch, '·' | '…' | '—' | '–' | '「' | '」' | '『' | '』')
-}
-
-fn is_punctuation_boundary(ch: char) -> bool {
-    is_word_boundary(ch) && !ch.is_whitespace()
-}
-
-fn find_ctrl_backspace_delete_from(chars: &[char], cursor: usize) -> usize {
-    let mut delete_from = cursor.min(chars.len());
-
-    while delete_from > 0 && chars[delete_from - 1].is_whitespace() {
-        delete_from -= 1;
-    }
-    if delete_from > 0 && is_punctuation_boundary(chars[delete_from - 1]) {
-        return delete_from - 1;
-    }
-    while delete_from > 0 && !is_word_boundary(chars[delete_from - 1]) {
-        delete_from -= 1;
-    }
-    delete_from
-}
-
-unsafe fn composer_mut() -> &'static mut hangul_engine::HangulComposer {
-    if G_COMPOSER.is_none() {
-        G_COMPOSER = Some(hangul_engine::HangulComposer::new());
-    }
-    G_COMPOSER.as_mut().unwrap()
+unsafe fn input() -> &'static mut InputController {
+    G_INPUT.get_or_insert_with(InputController::new)
 }
 
 unsafe fn get_selection(hwnd: HWND) -> (u32, u32) {
@@ -151,26 +86,8 @@ unsafe fn set_selection(hwnd: HWND, start: u32, end: u32) {
     SendMessageW(hwnd, EM_SETSEL, WPARAM(start as usize), LPARAM(end as isize));
 }
 
-unsafe fn replace_selection(hwnd: HWND, text: &str) {
-    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-    SendMessageW(
-        hwnd,
-        EM_REPLACESEL,
-        WPARAM(1),
-        LPARAM(wide.as_ptr() as isize),
-    );
-}
-
-unsafe fn clear_composition_tracking() {
-    G_COMPOSE_START = None;
-    G_COMPOSE_LEN_UTF16 = 0;
-    composer_mut().clear();
-}
-
 unsafe fn commit_composition() {
-    if composer_mut().has_pending() {
-        clear_composition_tracking();
-    }
+    input().commit();
 }
 
 unsafe fn sync_mode_radio(mode: InputMode) {
@@ -305,7 +222,7 @@ unsafe fn toggle_word_wrap(hwnd: HWND) {
 
 unsafe fn handle_alt_z_word_wrap(hwnd: HWND) -> bool {
     toggle_word_wrap(hwnd);
-    G_SUPPRESS_NEXT_WM_CHAR = true;
+    input().suppress_next_char();
     true
 }
 
@@ -341,12 +258,8 @@ unsafe fn toggle_global_hotkey(hwnd: HWND) {
 }
 
 unsafe fn toggle_input_mode() {
-    commit_composition();
-    G_INPUT_MODE = match G_INPUT_MODE {
-        InputMode::Han => InputMode::Eng,
-        InputMode::Eng => InputMode::Han,
-    };
-    sync_mode_radio(G_INPUT_MODE);
+    input().toggle_mode();
+    sync_mode_radio(input().mode());
 }
 
 unsafe fn focus_editor() {
@@ -401,79 +314,6 @@ unsafe fn acquire_single_instance() -> bool {
         return false;
     }
     true
-}
-
-unsafe fn render_composition_text(hwnd: HWND, text: &str) {
-    let start = G_COMPOSE_START.unwrap_or(0);
-    let end = start + G_COMPOSE_LEN_UTF16;
-    set_selection(hwnd, start, end);
-    replace_selection(hwnd, text);
-    let next_pos = start + utf16_len(text);
-    set_selection(hwnd, next_pos, next_pos);
-    G_COMPOSE_LEN_UTF16 = utf16_len(text);
-}
-
-unsafe fn append_committed_text(hwnd: HWND, text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    let start = G_COMPOSE_START.unwrap_or(0);
-    let end = start + G_COMPOSE_LEN_UTF16;
-    set_selection(hwnd, start, end);
-    replace_selection(hwnd, text);
-    let next = start + utf16_len(text);
-    set_selection(hwnd, next, next);
-    G_COMPOSE_START = Some(next);
-    G_COMPOSE_LEN_UTF16 = 0;
-}
-
-unsafe fn start_composition_at_caret(hwnd: HWND) {
-    let (start, end) = get_selection(hwnd);
-    if start != end {
-        set_selection(hwnd, start, end);
-        replace_selection(hwnd, "");
-        set_selection(hwnd, start, start);
-    }
-    G_COMPOSE_START = Some(start);
-    G_COMPOSE_LEN_UTF16 = 0;
-    composer_mut().clear();
-}
-
-unsafe fn handle_ctrl_backspace(hwnd: HWND) {
-    if composer_mut().has_pending() {
-        let text = composer_mut().pop_key();
-        render_composition_text(hwnd, &text);
-        if text.is_empty() {
-            clear_composition_tracking();
-        }
-        return;
-    }
-
-    let (start, end) = get_selection(hwnd);
-    if start != end {
-        set_selection(hwnd, start, end);
-        replace_selection(hwnd, "");
-        set_selection(hwnd, start, start);
-        return;
-    }
-
-    let len = GetWindowTextLengthW(hwnd) as usize;
-    if len == 0 || start == 0 {
-        return;
-    }
-    let mut buf: Vec<u16> = vec![0u16; len + 1];
-    GetWindowTextW(hwnd, &mut buf);
-    buf.truncate(len);
-    let text = String::from_utf16_lossy(&buf);
-    let chars: Vec<char> = text.chars().collect();
-    let mut cursor = start as usize;
-    if cursor > chars.len() {
-        cursor = chars.len();
-    }
-    let delete_from = find_ctrl_backspace_delete_from(&chars, cursor);
-    set_selection(hwnd, delete_from as u32, cursor as u32);
-    replace_selection(hwnd, "");
-    set_selection(hwnd, delete_from as u32, delete_from as u32);
 }
 
 fn main() {
@@ -700,8 +540,7 @@ unsafe extern "system" fn wnd_proc(
 
         WM_SYSCHAR => {
             // Alt+Z 메뉴 비프음 억제
-            if G_SUPPRESS_NEXT_WM_CHAR && wparam.0 as u32 == 'z' as u32 {
-                G_SUPPRESS_NEXT_WM_CHAR = false;
+            if wparam.0 as u32 == 'z' as u32 && input().take_suppress() {
                 return LRESULT(0);
             }
             DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -776,8 +615,8 @@ unsafe extern "system" fn wnd_proc(
             // Edit 컨트롤 Subclassing (Ctrl+Z, Ctrl+Y 가로채기)
             subclass_edit_control(G_HWND_EDIT);
 
-            G_INPUT_MODE = InputMode::Han;
-            sync_mode_radio(G_INPUT_MODE);
+            input().set_mode(InputMode::Han);
+            sync_mode_radio(input().mode());
 
             if let Some(cfg) = G_CONFIG.as_ref() {
                 sync_topmost_checkbox(cfg.always_on_top);
@@ -865,9 +704,8 @@ unsafe extern "system" fn wnd_proc(
             match ctrl_id as u32 {
                 editor_window::IDC_MODE_HAN => {
                     if notif == BN_CLICKED as u16 {
-                        commit_composition();
-                        G_INPUT_MODE = InputMode::Han;
-                        sync_mode_radio(G_INPUT_MODE);
+                        input().set_mode(InputMode::Han);
+                        sync_mode_radio(input().mode());
                         if G_HWND_EDIT != HWND(0 as _) {
                             let _ = SetFocus(G_HWND_EDIT);
                         }
@@ -875,9 +713,8 @@ unsafe extern "system" fn wnd_proc(
                 }
                 editor_window::IDC_MODE_ENG => {
                     if notif == BN_CLICKED as u16 {
-                        commit_composition();
-                        G_INPUT_MODE = InputMode::Eng;
-                        sync_mode_radio(G_INPUT_MODE);
+                        input().set_mode(InputMode::Eng);
+                        sync_mode_radio(input().mode());
                         if G_HWND_EDIT != HWND(0 as _) {
                             let _ = SetFocus(G_HWND_EDIT);
                         }
@@ -990,22 +827,24 @@ unsafe extern "system" fn edit_proc(
     result
 }
 
+// 메시지가 만들어질 당시의 키 상태 (GetAsyncKeyState는 처리 시점 상태라 빠른 입력에서 어긋난다)
+unsafe fn key_down(vk: VIRTUAL_KEY) -> bool {
+    (GetKeyState(vk.0 as i32) as u16 & 0x8000) != 0
+}
+
 unsafe fn edit_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_CHAR || msg == WM_SYSCHAR {
-        if wparam.0 == 0x7F || G_SUPPRESS_NEXT_WM_CHAR {
-            G_SUPPRESS_NEXT_WM_CHAR = false;
+        if !input().filter_char(wparam.0 as u32) {
             return LRESULT(0);
         }
     }
 
     if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
         let key = wparam.0 as u32;
-        let ctrl_pressed = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
-        let shift_pressed = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
 
         if key == VK_F1 {
             toggle_input_mode_and_focus_editor();
-            G_SUPPRESS_NEXT_WM_CHAR = true;
+            input().suppress_next_char();
             return LRESULT(0);
         }
 
@@ -1014,65 +853,20 @@ unsafe fn edit_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) 
             return LRESULT(0);
         }
 
-        if is_modifier_key(key) {
-            return CallWindowProcW(G_ORIG_EDIT_PROC, hwnd, msg, wparam, lparam);
-        }
-
-        if ctrl_pressed && key == 'A' as u32 {
-            commit_composition();
-            set_selection(hwnd, 0, u32::MAX);
-            G_SUPPRESS_NEXT_WM_CHAR = true;
+        let ev = KeyEvent {
+            vk: key,
+            shift: key_down(VK_SHIFT),
+            ctrl: key_down(VK_CONTROL),
+            alt: msg == WM_SYSKEYDOWN,
+        };
+        let mut buf = editor_window::EditBuffer(hwnd);
+        if input().handle_key(&mut buf, ev) == KeyResult::Handled {
             return LRESULT(0);
         }
-
-        if ctrl_pressed && key == VK_BACKSPACE {
-            handle_ctrl_backspace(hwnd);
-            G_SUPPRESS_NEXT_WM_CHAR = true;
-            return LRESULT(0);
-        }
-
-        if ctrl_pressed {
-            commit_composition();
-            return CallWindowProcW(G_ORIG_EDIT_PROC, hwnd, msg, wparam, lparam);
-        }
-
-        if key == VK_BACKSPACE {
-            if composer_mut().has_pending() {
-                let text = composer_mut().pop_key();
-                render_composition_text(hwnd, &text);
-                if text.is_empty() {
-                    clear_composition_tracking();
-                }
-                G_SUPPRESS_NEXT_WM_CHAR = true;
-                return LRESULT(0);
-            }
-            return CallWindowProcW(G_ORIG_EDIT_PROC, hwnd, msg, wparam, lparam);
-        }
-
-        if G_INPUT_MODE == InputMode::Han {
-            if let Some(eng_key) = map_physical_key_to_eng(key, shift_pressed) {
-                let (sel_start, sel_end) = get_selection(hwnd);
-                if G_COMPOSE_START.is_none() || sel_start != sel_end {
-                    start_composition_at_caret(hwnd);
-                }
-                let step = composer_mut().feed_key(eng_key);
-                append_committed_text(hwnd, &step.committed);
-                render_composition_text(hwnd, &step.composing);
-                G_SUPPRESS_NEXT_WM_CHAR = true;
-                return LRESULT(0);
-            }
-        } else {
-            // 영 모드에서는 기본 영어 입력으로 통과
-            commit_composition();
-            return CallWindowProcW(G_ORIG_EDIT_PROC, hwnd, msg, wparam, lparam);
-        }
-
-        // 조합을 끊는 키가 오면 현재 조합을 확정하고 기본 동작으로 넘긴다.
-        commit_composition();
     }
 
     if msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN {
-        commit_composition();
+        input().on_mouse_down();
     }
 
     CallWindowProcW(G_ORIG_EDIT_PROC, hwnd, msg, wparam, lparam)
@@ -1081,17 +875,6 @@ unsafe fn edit_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_map_physical_key_to_eng() {
-        assert_eq!(map_physical_key_to_eng('R' as u32, false), Some('r'));
-        assert_eq!(map_physical_key_to_eng('R' as u32, true), Some('R'));
-        assert_eq!(map_physical_key_to_eng('G' as u32, false), Some('g'));
-        assert_eq!(map_physical_key_to_eng('G' as u32, true), Some('g'));
-        assert_eq!(map_physical_key_to_eng(VK_BACKSPACE, false), None);
-        assert_eq!(map_physical_key_to_eng('T' as u32, true), Some('T'));
-        assert!(is_modifier_key(VK_SHIFT.0 as u32));
-    }
 
     #[test]
     fn test_composer_backspace_syllable_in_main_flow() {
@@ -1105,40 +888,5 @@ mod tests {
         }
         assert_eq!(format!("{committed}{composing}"), "한글");
         assert_eq!(composer.pop_key(), "그");
-    }
-
-    #[test]
-    fn test_korean_e_backspace_to_ieung() {
-        let mut composer = hangul_engine::HangulComposer::new();
-        let mut committed = String::new();
-        let mut composing = String::new();
-        for ch in "gksrnrdjdl".chars() {
-            let step = composer.feed_key(ch);
-            committed.push_str(&step.committed);
-            composing = step.composing;
-        }
-        assert_eq!(format!("{committed}{composing}"), "한국어이");
-        assert_eq!(composer.pop_key(), "ㅇ");
-    }
-
-    #[test]
-    fn test_ctrl_backspace_korean_word_boundary() {
-        let chars: Vec<char> = "입력한다? 입".chars().collect();
-        let cursor = chars.len();
-        assert_eq!(find_ctrl_backspace_delete_from(&chars, cursor), "입력한다? ".chars().count());
-    }
-
-    #[test]
-    fn test_ctrl_backspace_deletes_punctuation_at_boundary() {
-        let chars: Vec<char> = "입력한다?".chars().collect();
-        let cursor = chars.len();
-        assert_eq!(find_ctrl_backspace_delete_from(&chars, cursor), "입력한다".chars().count());
-    }
-
-    #[test]
-    fn test_ctrl_backspace_whitespace_boundary() {
-        let chars: Vec<char> = "hello   world".chars().collect();
-        let cursor = chars.len();
-        assert_eq!(find_ctrl_backspace_delete_from(&chars, cursor), "hello   ".chars().count());
     }
 }
