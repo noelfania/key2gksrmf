@@ -118,13 +118,10 @@ unsafe fn uxtheme_ordinal(ordinal: u16) -> Option<unsafe extern "system" fn() ->
 pub unsafe fn allow_dark_menus() {
     if let Some(f) = uxtheme_ordinal(UXTHEME_SET_PREFERRED_APP_MODE) {
         let set_preferred_app_mode: unsafe extern "system" fn(i32) -> i32 = std::mem::transmute(f);
-        let mut mode = APP_MODE_ALLOW_DARK;
         // 디버그 빌드 확인용: KEY2GKSRMF_THEME=dark 이면 메뉴도 강제로 다크 (ForceDark = 2)
-        #[cfg(debug_assertions)]
-        if std::env::var("KEY2GKSRMF_THEME").is_ok_and(|v| v == "dark") {
-            mode = 2;
-        }
-        set_preferred_app_mode(mode);
+        let force_dark = cfg!(debug_assertions)
+            && std::env::var("KEY2GKSRMF_THEME").is_ok_and(|v| v == "dark");
+        set_preferred_app_mode(if force_dark { 2 } else { APP_MODE_ALLOW_DARK });
     }
     flush_menu_themes();
 }
