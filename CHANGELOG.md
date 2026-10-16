@@ -6,6 +6,8 @@ key2gksrmf의 버전별 변경 내역입니다. 형식은 [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-16
+
 ### Added
 
 - exe 파일 버전 정보(VERSIONINFO). 탐색기 속성의 "자세히"와 작업 관리자에 버전·이름이 표시된다. `Cargo.toml` 버전에서 빌드 시 생성.
@@ -93,7 +95,8 @@ key2gksrmf의 버전별 변경 내역입니다. 형식은 [Keep a Changelog](htt
 
 - 첫 릴리스. 트레이 상주 에디터에서 물리키를 두벌식 한글로 조합.
 
-[Unreleased]: https://github.com/noelfania/key2gksrmf/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/noelfania/key2gksrmf/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/noelfania/key2gksrmf/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/noelfania/key2gksrmf/compare/v0.1.1226...v0.2.0
 [0.1.1226]: https://github.com/noelfania/key2gksrmf/compare/v0.1.1224...v0.1.1226
 [0.1.1224]: https://github.com/noelfania/key2gksrmf/compare/v0.1.1124...v0.1.1224
