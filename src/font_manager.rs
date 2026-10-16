@@ -18,6 +18,22 @@ impl EmbeddedFont {
     pub fn hfont(&self) -> HFONT {
         self.hfont
     }
+
+    /// DPI에 맞춰 폰트를 다시 만든다. 이전 HFONT는 새 폰트를 컨트롤에 적용한 뒤 호출자가 지운다.
+    pub unsafe fn recreate_for_dpi(&mut self, dpi: u32) -> Option<HFONT> {
+        let hfont = create_ui_font(editor_font_height(dpi));
+        if hfont == HFONT(0 as _) {
+            return None;
+        }
+        Some(std::mem::replace(&mut self.hfont, hfont))
+    }
+}
+
+// 96 DPI 기준 에디터 글자 높이(px)
+const EDITOR_FONT_PX: i32 = 16;
+
+fn editor_font_height(dpi: u32) -> i32 {
+    -((EDITOR_FONT_PX * dpi as i32 + 48) / 96)
 }
 
 const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/Pretendard-Regular.ttf");
@@ -42,7 +58,7 @@ unsafe fn create_ui_font(height: i32) -> HFONT {
     )
 }
 
-pub unsafe fn load_embedded_font() -> Option<EmbeddedFont> {
+pub unsafe fn load_embedded_font(dpi: u32) -> Option<EmbeddedFont> {
     let mut count = 0u32;
     let mem_handle = AddFontMemResourceEx(
         FONT_DATA.as_ptr() as *const core::ffi::c_void,
@@ -51,7 +67,7 @@ pub unsafe fn load_embedded_font() -> Option<EmbeddedFont> {
         &mut count,
     );
 
-    let hfont = create_ui_font(-16);
+    let hfont = create_ui_font(editor_font_height(dpi));
     if hfont == HFONT(0 as _) {
         if mem_handle != HANDLE(0 as _) {
             let _ = RemoveFontMemResourceEx(mem_handle);
