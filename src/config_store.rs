@@ -39,12 +39,17 @@ fn default_word_wrap() -> bool {
     true
 }
 
-pub const DEFAULT_GUTTER_BACKGROUND: &str = "#F0F0F0";
-pub const DEFAULT_LINE_NUMBER: &str = "#6E6E6E";
-pub const DEFAULT_STATUS_BAR: &str = "#F0F0F0";
+pub const DEFAULT_GUTTER_BACKGROUND: &str = "#F3F3F3";
+pub const DEFAULT_LINE_NUMBER: &str = "#8A8A8A";
+pub const DEFAULT_STATUS_BAR: &str = "#F3F3F3";
 pub const DEFAULT_EDITOR_BACKGROUND: &str = "#FFFFFF";
 
-/// UI 색상 설정 ("#RRGGBB"). 없거나 파싱 실패 시 시스템 기본색을 사용한다.
+// 이전 버전 기본값. 사용자가 바꾸지 않은 값으로 보고 새 기본값으로 옮긴다.
+const LEGACY_GUTTER_BACKGROUND: &str = "#F0F0F0";
+const LEGACY_LINE_NUMBER: &str = "#6E6E6E";
+const LEGACY_STATUS_BAR: &str = "#F0F0F0";
+
+/// 라이트 모드 UI 색상 ("#RRGGBB"). 없거나 파싱 실패 시 내장 팔레트를 사용한다.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColorConfig {
     #[serde(default = "default_gutter_background")]
@@ -84,7 +89,35 @@ impl Default for ColorConfig {
     }
 }
 
+/// 다크 모드 UI 색상 덮어쓰기 ("#RRGGBB"). 기본은 모두 비어 있고 내장 다크 팔레트를 쓴다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DarkColorConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gutter_background: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_number: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_bar: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_background: Option<String>,
+}
+
 impl ColorConfig {
+    /// 이전 버전 기본값을 새 기본값으로 바꾼다. 바뀐 게 있으면 true.
+    pub fn migrate_legacy_defaults(&mut self) -> bool {
+        let mut changed = false;
+        let mut swap = |field: &mut Option<String>, legacy: &str, current: &str| {
+            if field.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(legacy)) {
+                *field = Some(current.to_string());
+                changed = true;
+            }
+        };
+        swap(&mut self.gutter_background, LEGACY_GUTTER_BACKGROUND, DEFAULT_GUTTER_BACKGROUND);
+        swap(&mut self.line_number, LEGACY_LINE_NUMBER, DEFAULT_LINE_NUMBER);
+        swap(&mut self.status_bar, LEGACY_STATUS_BAR, DEFAULT_STATUS_BAR);
+        changed
+    }
+
     /// 누락된 색상 키에 기본 HEX를 채운다 (기존 `"colors": {}` 호환).
     pub fn fill_defaults(&mut self) {
         if self.gutter_background.is_none() {
@@ -128,6 +161,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub colors: ColorConfig,
     #[serde(default)]
+    pub colors_dark: DarkColorConfig,
+    #[serde(default)]
     pub window: WindowSize,
 }
 
@@ -139,6 +174,7 @@ impl Default for AppConfig {
             word_wrap: default_word_wrap(),
             global_hotkey_open: false,
             colors: ColorConfig::default(),
+            colors_dark: DarkColorConfig::default(),
             window: WindowSize::default(),
         }
     }
@@ -171,6 +207,7 @@ pub fn load() -> AppConfig {
             // 구버전 `"colors": {}` 등 누락 키를 기본 HEX로 채우고 저장
             let before = cfg.colors.clone();
             cfg.colors.fill_defaults();
+            cfg.colors.migrate_legacy_defaults();
             if cfg.colors != before {
                 let _ = save(&cfg);
             }
@@ -222,10 +259,33 @@ mod tests {
     #[test]
     fn test_color_config_default_serializes_hex_keys() {
         let json = serde_json::to_string_pretty(&ColorConfig::default()).unwrap();
-        assert!(json.contains("\"gutter_background\": \"#F0F0F0\""));
-        assert!(json.contains("\"line_number\": \"#6E6E6E\""));
-        assert!(json.contains("\"status_bar\": \"#F0F0F0\""));
-        assert!(json.contains("\"editor_background\": \"#FFFFFF\""));
+        assert!(json.contains(&format!("\"gutter_background\": \"{DEFAULT_GUTTER_BACKGROUND}\"")));
+        assert!(json.contains(&format!("\"line_number\": \"{DEFAULT_LINE_NUMBER}\"")));
+        assert!(json.contains(&format!("\"status_bar\": \"{DEFAULT_STATUS_BAR}\"")));
+        assert!(json.contains(&format!("\"editor_background\": \"{DEFAULT_EDITOR_BACKGROUND}\"")));
+    }
+
+    #[test]
+    fn test_legacy_default_colors_migrate_but_custom_colors_stay() {
+        let mut colors = ColorConfig {
+            gutter_background: Some("#f0f0f0".into()),
+            line_number: Some("#6E6E6E".into()),
+            status_bar: Some("#123456".into()),
+            editor_background: Some("#FFFFFF".into()),
+        };
+        assert!(colors.migrate_legacy_defaults());
+        assert_eq!(colors.gutter_background.as_deref(), Some(DEFAULT_GUTTER_BACKGROUND));
+        assert_eq!(colors.line_number.as_deref(), Some(DEFAULT_LINE_NUMBER));
+        assert_eq!(colors.status_bar.as_deref(), Some("#123456"));
+        assert!(!colors.migrate_legacy_defaults());
+    }
+
+    #[test]
+    fn test_colors_dark_defaults_to_empty_object() {
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.colors_dark, DarkColorConfig::default());
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"colors_dark\":{}"));
     }
 
     #[test]

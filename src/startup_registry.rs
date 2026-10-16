@@ -53,6 +53,10 @@ pub fn is_registered() -> bool {
 
 /// 레지스트리에 현재 실행 파일 경로로 시작 프로그램을 등록한다
 pub fn register() -> bool {
+    // 디버그 빌드는 사용자의 실제 시작 프로그램 등록을 건드리지 않는다
+    if cfg!(debug_assertions) {
+        return true;
+    }
     let exe_path = match std::env::current_exe() {
         Ok(p) => p,
         Err(_) => return false,
@@ -64,7 +68,8 @@ pub fn register() -> bool {
 
     let key_wide = to_wide(RUN_KEY);
     let name_wide = to_wide(app_info::APP_NAME);
-    let val_wide = to_wide(&exe_str);
+    // 공백이 있는 경로도 정확히 실행되도록 따옴표로 감싼다
+    let val_wide = to_wide(&format!("\"{exe_str}\""));
     // REG_SZ 값은 u8 바이트 슬라이스로 전달
     let val_bytes: Vec<u8> = val_wide
         .iter()
@@ -99,6 +104,9 @@ pub fn register() -> bool {
 
 /// 레지스트리에서 시작 프로그램 등록을 해제한다
 pub fn unregister() -> bool {
+    if cfg!(debug_assertions) {
+        return true;
+    }
     let key_wide = to_wide(RUN_KEY);
     let name_wide = to_wide(app_info::APP_NAME);
     unsafe {
@@ -144,11 +152,14 @@ fn unregister_legacy_app_name() {
 
 /// 앱 시작 시 레지스트리와 설정값의 정합성을 맞춘다
 pub fn sync_on_startup(want_startup: bool) {
+    if cfg!(debug_assertions) {
+        return;
+    }
     unregister_legacy_app_name();
-    let actual = is_registered();
-    if want_startup && !actual {
+    if want_startup {
+        // exe를 옮겼거나 이전 형식(따옴표 없음)으로 등록돼 있어도 현재 경로로 갱신
         register();
-    } else if !want_startup && actual {
+    } else if is_registered() {
         unregister();
     }
 }

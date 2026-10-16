@@ -6,14 +6,25 @@
 
 ## 릴리스 만들기
 
-태그를 push하면 GitHub Actions가 자동으로 빌드하고, [GitHub Releases](https://github.com/noelfania/key2gksrmf/releases)에 zip을 첨부합니다.
+**버전을 올려 `main`에 머지하면 태그·빌드·릴리스가 자동으로 진행됩니다.** 태그를 직접 만들 필요가 없습니다.
 
-워크플로: [.github/workflows/release.yml](../.github/workflows/release.yml)
+1. 기능 브랜치(`feature/YYYYMM-NNN`)에서 작업하면서 [CHANGELOG.md](../CHANGELOG.md)의 `## [Unreleased]` 아래에 변경 내역을 적습니다.
+2. 릴리스할 때 같은 브랜치(또는 별도 릴리스 커밋)에서:
+   - `## [Unreleased]` 내용을 `## [X.Y.Z] - YYYY-MM-DD` 아래로 옮기고, 맨 아래 비교 링크를 추가합니다.
+   - `Cargo.toml`의 `version`을 `X.Y.Z`로 올리고 `cargo build`로 `Cargo.lock`도 갱신합니다.
+3. PR을 `main`에 머지합니다.
+4. [version-tag.yml](../.github/workflows/version-tag.yml)이 `Cargo.toml` 변경을 감지합니다.
+   - CHANGELOG에 `## [X.Y.Z]` 섹션이 없으면 실패합니다.
+   - `vX.Y.Z` 태그가 없으면 만들어 push하고, [release.yml](../.github/workflows/release.yml)을 호출해 테스트·빌드 후 [GitHub Releases](https://github.com/noelfania/key2gksrmf/releases)에 zip을 올립니다. 릴리스 본문은 CHANGELOG의 해당 섹션입니다.
+   - 태그가 이미 있으면 아무것도 하지 않습니다 (버전을 안 올린 `Cargo.toml` 수정).
+
+버전 규칙: 0.2.0부터 SemVer. 기능 추가는 minor, 버그 수정만이면 patch.
+
+수동 릴리스(재빌드 등)가 필요하면 태그를 직접 push해도 `release.yml`이 실행됩니다.
 
 ```bash
-# 예: Cargo.toml version 이 0.1.1226 이면
-git tag v0.1.1226
-git push origin v0.1.1226
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 - `Cargo.toml`의 `version`과 태그(`vX.Y.Z`)는 맞춰 둡니다.

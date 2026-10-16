@@ -11,4 +11,11 @@
         publicKeyToken="6595b64144ccf1df" />
     </dependentAssembly>
   </dependency>
+  <!-- 모니터별 DPI 인식 (PerMonitorV2): 배율이 높아도 흐리게 확대되지 않는다 -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
 </assembly>

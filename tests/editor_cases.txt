@@ -1,0 +1,142 @@
+# 에디터 입력 변환 시나리오
+# src/input_controller/tests.rs 가 이 파일을 읽어 메모리 버퍼와 실제 Win32 EDIT 양쪽에서 실행한다.
+#
+# 형식 (케이스마다)
+#   [케이스 이름]
+#   start: 시작 상태 (생략 시 빈 문서 "|")
+#   keys: 입력할 키
+#   expect: 기대 결과
+#
+# 상태 마크업:  |  캐럿   [..]  선택 영역   \n  줄바꿈   \|  \[  \]  \\  문자 그대로
+#               마커가 없으면 캐럿은 문서 끝
+# 키:  a~z  물리키 (한 모드면 두벌식 조합)      A~Z  Shift+키      0~9 공백 기호  그대로
+#      {Space} {Enter} {Tab} {BS} {Del} {Left} {Right} {Up} {Down} {Home} {End}
+#      {F1} 한/영 전환   {Ctrl+A} {Ctrl+BS} {Ctrl+X}   {Alt+X}
+#      {Click:N} 마우스로 UTF-16 위치 N 클릭   {Paste:텍스트} Ctrl+V 붙여넣기   {{ 는 문자 {
+
+# ---------- 기본 조합 ----------
+
+[기본 조합]
+keys: gksrmf
+expect: 한글|
+
+[띄어쓰기]
+keys: gksrmf dkssud
+expect: 한글 안녕|
+
+[숫자가 조합을 끊음]
+keys: dkssud123gks
+expect: 안녕123한|
+
+[Enter]
+keys: gks{Enter}rmf
+expect: 한\n글|
+
+[쌍자음 Shift 줬]
+keys: wnjT
+expect: 줬|
+
+[Shift 없는 ㅅ 줫]
+keys: wnjt
+expect: 줫|
+
+[쌍자음 없는 키의 Shift는 무시]
+keys: Gks
+expect: 한|
+
+[겹받침 뒤 모음 분리]
+keys: ekfrl
+expect: 달기|
+
+[겹받침 없이]
+keys: djqtdl
+expect: 없이|
+
+# ---------- Backspace ----------
+
+[조합 중 BS는 키 단위로 되돌림]
+keys: gksrmf{BS}
+expect: 한그|
+
+[조합 중 BS 연속]
+keys: gksrnrdjdl{BS}
+expect: 한국어ㅇ|
+
+[조합을 다 지운 뒤 BS는 앞 글자 삭제]
+keys: gksrmf{BS}{BS}{BS}{BS}
+expect: |
+
+# ---------- 한/영 전환 ----------
+
+[F1 영문 전환]
+keys: gks{F1}abc
+expect: 한abc|
+
+[F1 왕복]
+keys: gks{F1}a{F1}rk
+expect: 한a가|
+
+[영문 대문자]
+keys: {F1}Hello
+expect: Hello|
+
+# ---------- 캐럿·선택 경계 ----------
+
+[선택 영역 덮어쓰기]
+start: 가[나다]라
+keys: rk
+expect: 가가|라
+
+[중간 삽입]
+start: 가|라
+keys: sk
+expect: 가나|라
+
+[방향키로 이동 후 입력]
+keys: rk{Left}sk
+expect: 나|가
+
+[클릭 후 입력]
+keys: gksrmf{Click:1}rk
+expect: 한가|글
+
+[붙여넣기 직후 입력]
+keys: rk{Paste:abc}sk
+expect: 가abc나|
+
+[Ctrl+A 후 입력]
+start: abc|
+keys: {Ctrl+A}rk
+expect: 가|
+
+[Delete]
+start: 가|나다
+keys: {Del}
+expect: 가|다
+
+# ---------- Ctrl+Backspace ----------
+
+[Ctrl+BS 조합 중이면 키 단위 되돌림]
+keys: gksrmf{Ctrl+BS}
+expect: 한그|
+
+[Ctrl+BS 구두점 경계]
+start: 입력한다?|
+keys: {Ctrl+BS}
+expect: 입력한다|
+
+[Ctrl+BS 단어 단위]
+start: 입력한다? 입|
+keys: {Ctrl+BS}
+expect: 입력한다? |
+
+[Ctrl+BS 앞에 이모지]
+start: 😀 한글|
+keys: {Ctrl+BS}
+expect: 😀 |
+
+# ---------- Alt ----------
+
+[Alt+문자는 글자를 넣지 않음]
+keys: gks{Alt+K}
+expect: 한|

@@ -1,9 +1,17 @@
 name: Release
 
+# 1) main에서 Cargo.toml 버전이 오르면 version-tag.yml이 태그를 만들고 이 워크플로를 호출한다.
+# 2) 수동으로 vX.Y.Z 태그를 push해도 실행된다.
 on:
   push:
     tags:
       - "v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "릴리스할 태그 (예: v0.2.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -11,8 +19,12 @@ permissions:
 jobs:
   build-release:
     runs-on: windows-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -25,13 +37,32 @@ jobs:
       - name: Package zip
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}"
-          $zip = "key2gksrmf-$version-win64.zip"
+          $zip = "key2gksrmf-$env:TAG-win64.zip"
           Compress-Archive -Path "target/release/key2gksrmf.exe" -DestinationPath $zip
           echo "ZIP_NAME=$zip" >> $env:GITHUB_ENV
+
+      - name: Extract release notes from CHANGELOG.md
+        shell: pwsh
+        run: |
+          # "## [X.Y.Z]" 다음 줄부터 다음 "## [" 전까지
+          $version = $env:TAG.TrimStart('v')
+          $lines = Get-Content CHANGELOG.md -Encoding utf8
+          $start = [Array]::FindIndex($lines, [Predicate[string]]{ param($l) $l -match "^## \[$([regex]::Escape($version))\]" })
+          if ($start -lt 0) {
+            "CHANGELOG.md에 [$version] 섹션이 없습니다." | Out-File RELEASE_NOTES.md -Encoding utf8
+          } else {
+            $end = $lines.Length
+            for ($i = $start + 1; $i -lt $lines.Length; $i++) {
+              if ($lines[$i] -match '^## \[' -or $lines[$i] -match '^\[.+\]: ') { $end = $i; break }
+            }
+            $lines[($start + 1)..($end - 1)] -join "`n" | Out-File RELEASE_NOTES.md -Encoding utf8
+          }
+          Get-Content RELEASE_NOTES.md
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          body_path: RELEASE_NOTES.md
           files: ${{ env.ZIP_NAME }}
-          generate_release_notes: true
