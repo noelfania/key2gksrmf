@@ -6,6 +6,14 @@ key2gksrmf의 버전별 변경 내역입니다. 형식은 [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- exe 파일 버전 정보(VERSIONINFO). 탐색기 속성의 "자세히"와 작업 관리자에 버전·이름이 표시된다. `Cargo.toml` 버전에서 빌드 시 생성.
+
+### Fixed
+
+- 웹 페이지 구조화 데이터(`softwareVersion`)가 0.1.1226으로 고정돼 있던 문제. 빌드 시 `Cargo.toml` 버전을 넣는다.
+
 ## [0.2.0] - 2026-10-16
 
 ### Added
