@@ -37,6 +37,7 @@ pub const IDC_ALWAYS_ON_TOP_CHECK: u32 = 2001;
 pub const IDC_MODE_HAN: u32 = 2002;
 pub const IDC_MODE_ENG: u32 = 2003;
 pub const IDC_WORD_WRAP_CHECK: u32 = 2004;
+pub const IDC_GUTTER_LINE: u32 = 2005;
 
 // ---------- DPI 배율 (치수는 모두 96 DPI 기준 값) ----------
 
@@ -141,6 +142,8 @@ impl TextBuffer for EditBuffer {
 // 거터가 참조하는 에디터 핸들 (단일 인스턴스 앱이므로 모듈 전역으로 관리)
 static mut G_GUTTER_HWND: HWND = HWND(0 as _);
 static mut G_GUTTER_EDIT: HWND = HWND(0 as _);
+// 거터에서 마지막으로 클릭한 시각행 (IDC_GUTTER_LINE 처리 시 사용)
+static mut G_GUTTER_CLICK_LINE: i32 = -1;
 
 // ---------- 색상 테마 ----------
 
@@ -247,7 +250,7 @@ pub unsafe fn init_theme(cfg: &AppConfig, dark: bool, accent: COLORREF) {
         text,
         text_secondary,
         line_number,
-        line_number_current: text,
+        line_number_current: accent,
         editor_bg: editor,
         accent,
         on_accent,
@@ -966,8 +969,106 @@ unsafe extern "system" fn gutter_wnd_proc(
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+            let edit = G_GUTTER_EDIT;
+            if edit != HWND(0 as _) {
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let (top, line_height) = edit_line_metrics(hwnd, edit);
+                let first_visible =
+                    SendMessageW(edit, EM_GETFIRSTVISIBLELINE, WPARAM(0), LPARAM(0)).0 as i32;
+                G_GUTTER_CLICK_LINE = if y < top {
+                    -1
+                } else {
+                    first_visible + (y - top) / line_height
+                };
+                let parent = GetParent(hwnd).unwrap_or_default();
+                SendMessageW(
+                    parent,
+                    WM_COMMAND,
+                    WPARAM((BN_CLICKED as usize) << 16 | IDC_GUTTER_LINE as usize),
+                    LPARAM(hwnd.0 as isize),
+                );
+            }
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+/// 에디터 포맷 영역 상단 y와 행 높이 (거터 그리기·클릭 판정 공용).
+unsafe fn edit_line_metrics(gutter: HWND, edit: HWND) -> (i32, i32) {
+    let hdc = GetDC(gutter);
+    let hfont = HFONT(SendMessageW(edit, WM_GETFONT, WPARAM(0), LPARAM(0)).0 as _);
+    let old_font = if hfont != HFONT(0 as _) {
+        SelectObject(hdc, HGDIOBJ(hfont.0))
+    } else {
+        HGDIOBJ(0 as _)
+    };
+    let mut tm = TEXTMETRICW::default();
+    let _ = GetTextMetricsW(hdc, &mut tm);
+    if old_font != HGDIOBJ(0 as _) {
+        SelectObject(hdc, old_font);
+    }
+    ReleaseDC(gutter, hdc);
+
+    let mut fmt_rect = RECT::default();
+    SendMessageW(
+        edit,
+        EM_GETRECT,
+        WPARAM(0),
+        LPARAM(&mut fmt_rect as *mut _ as isize),
+    );
+    (fmt_rect.top, (tm.tmHeight + tm.tmExternalLeading).max(1))
+}
+
+/// 거터에서 클릭한 행이 속한 논리 행 전체 선택 범위 (개행은 제외해 캐럿이 그 행에 남는다).
+/// 텍스트가 없는 아래쪽 빈 영역을 클릭했으면 None.
+pub unsafe fn gutter_click_selection() -> Option<(u32, u32)> {
+    let edit = G_GUTTER_EDIT;
+    let line = G_GUTTER_CLICK_LINE;
+    if edit == HWND(0 as _) || line < 0 {
+        return None;
+    }
+    let line_count = SendMessageW(edit, EM_GETLINECOUNT, WPARAM(0), LPARAM(0)).0 as i32;
+    if line >= line_count {
+        return None;
+    }
+    let char_index = SendMessageW(edit, EM_LINEINDEX, WPARAM(line as usize), LPARAM(0)).0;
+    if char_index < 0 {
+        return None;
+    }
+    let buf = EditBuffer(edit).text_utf16();
+    let pos = (char_index as usize).min(buf.len());
+    let newline = '\n' as u16;
+    let start = buf[..pos].iter().rposition(|&c| c == newline).map_or(0, |i| i + 1);
+    let end = buf[pos..]
+        .iter()
+        .position(|&c| c == newline || c == '\r' as u16)
+        .map_or(buf.len(), |i| pos + i);
+    Some((start as u32, end as u32))
+}
+
+/// 행 번호를 숫자당 같은 폭(0~9 중 가장 넓은 글자)의 칸에 오른쪽 정렬로 그린다.
+unsafe fn draw_line_number(hdc: HDC, number: usize, right: i32, top: i32, bottom: i32, cell_w: i32) {
+    let digits: Vec<u16> = number.to_string().encode_utf16().collect();
+    let mut x = right;
+    for &d in digits.iter().rev() {
+        let mut ch = [d];
+        let mut rect = RECT { left: x - cell_w, top, right: x, bottom };
+        DrawTextW(hdc, &mut ch, &mut rect, DT_CENTER | DT_TOP | DT_SINGLELINE | DT_NOCLIP);
+        x -= cell_w;
+    }
+}
+
+unsafe fn max_digit_width(hdc: HDC) -> i32 {
+    ('0'..='9')
+        .map(|c| {
+            let mut size = SIZE::default();
+            let _ = GetTextExtentPoint32W(hdc, &[c as u16], &mut size);
+            size.cx
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 unsafe fn paint_gutter(hwnd: HWND) {
@@ -993,7 +1094,8 @@ unsafe fn paint_gutter(hwnd: HWND) {
         return;
     }
 
-    // 에디터와 같은 폰트로 행 높이를 일치시킨다
+    // 에디터와 같은 폰트로 행 높이를 일치시키고, 포맷 영역 상단 오프셋에 맞춰 시작 y를 정렬
+    let (fmt_top, line_height) = edit_line_metrics(hwnd, edit);
     let hfont = HFONT(SendMessageW(edit, WM_GETFONT, WPARAM(0), LPARAM(0)).0 as _);
     let old_font = if hfont != HFONT(0 as _) {
         SelectObject(hdc, HGDIOBJ(hfont.0))
@@ -1001,18 +1103,30 @@ unsafe fn paint_gutter(hwnd: HWND) {
         HGDIOBJ(0 as _)
     };
 
-    let mut tm = TEXTMETRICW::default();
-    let _ = GetTextMetricsW(hdc, &mut tm);
-    let line_height = (tm.tmHeight + tm.tmExternalLeading).max(1);
+    // 현재 행용 굵은 폰트 (에디터 폰트에서 굵기만 바꾼다)
+    let mut bold_font = HFONT(0 as _);
+    if hfont != HFONT(0 as _) {
+        let mut lf = LOGFONTW::default();
+        let got = GetObjectW(
+            HGDIOBJ(hfont.0),
+            std::mem::size_of::<LOGFONTW>() as i32,
+            Some(&mut lf as *mut _ as *mut _),
+        );
+        if got != 0 {
+            lf.lfWeight = FW_BOLD.0 as i32;
+            bold_font = CreateFontIndirectW(&lf);
+        }
+    }
 
-    // 에디터 포맷 영역의 상단 오프셋에 맞춰 시작 y를 정렬
-    let mut fmt_rect = RECT::default();
-    SendMessageW(
-        edit,
-        EM_GETRECT,
-        WPARAM(0),
-        LPARAM(&mut fmt_rect as *mut _ as isize),
-    );
+    // 숫자 칸 폭: 일반·굵은 폰트 모두에서 가장 넓은 숫자 기준
+    let mut cell_w = max_digit_width(hdc);
+    if bold_font != HFONT(0 as _) {
+        SelectObject(hdc, HGDIOBJ(bold_font.0));
+        cell_w = cell_w.max(max_digit_width(hdc));
+        if hfont != HFONT(0 as _) {
+            SelectObject(hdc, HGDIOBJ(hfont.0));
+        }
+    }
 
     let first_visible =
         SendMessageW(edit, EM_GETFIRSTVISIBLELINE, WPARAM(0), LPARAM(0)).0 as i32;
@@ -1068,27 +1182,35 @@ unsafe fn paint_gutter(hwnd: HWND) {
         }
 
         let line_no = newlines_before + 1;
-        // 현재 커서 행은 강조색으로 표시
-        let color = if line_no == caret_line {
-            theme().line_number_current
-        } else {
-            theme().line_number
-        };
-        let _ = SetTextColor(hdc, color);
+        // 현재 커서 행은 강조색(상단바 accent) 굵은 글씨로 표시
+        let current = line_no == caret_line;
+        let _ = SetTextColor(
+            hdc,
+            if current { theme().line_number_current } else { theme().line_number },
+        );
+        if current && bold_font != HFONT(0 as _) {
+            SelectObject(hdc, HGDIOBJ(bold_font.0));
+        }
 
-        let number = line_no.to_string();
-        let mut wide: Vec<u16> = number.encode_utf16().collect();
-        let mut rect = RECT {
-            left: 0,
-            top: fmt_rect.top + i * line_height,
-            right: client.right - px(8),
-            bottom: fmt_rect.top + (i + 1) * line_height,
-        };
-        DrawTextW(hdc, &mut wide, &mut rect, DT_RIGHT | DT_TOP | DT_SINGLELINE);
+        draw_line_number(
+            hdc,
+            line_no,
+            client.right - px(8),
+            fmt_top + i * line_height,
+            fmt_top + (i + 1) * line_height,
+            cell_w,
+        );
+
+        if current && bold_font != HFONT(0 as _) && hfont != HFONT(0 as _) {
+            SelectObject(hdc, HGDIOBJ(hfont.0));
+        }
     }
 
     if old_font != HGDIOBJ(0 as _) {
         SelectObject(hdc, old_font);
+    }
+    if bold_font != HFONT(0 as _) {
+        let _ = DeleteObject(HGDIOBJ(bold_font.0));
     }
     let _ = EndPaint(hwnd, &ps);
 }

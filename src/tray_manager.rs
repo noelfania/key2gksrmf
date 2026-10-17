@@ -120,12 +120,6 @@ pub unsafe fn refresh_tray_icon(nid: &mut NOTIFYICONDATAW, hinstance: HINSTANCE)
     }
 }
 
-pub unsafe fn set_tray_tip(nid: &mut NOTIFYICONDATAW, tip: &str) {
-    copy_to_wide_buf(&mut nid.szTip, tip);
-    nid.uFlags = NIF_TIP | NIF_SHOWTIP;
-    let _ = Shell_NotifyIconW(NIM_MODIFY, nid);
-}
-
 pub unsafe fn remove_tray_icon(nid: &NOTIFYICONDATAW) {
     let _ = Shell_NotifyIconW(NIM_DELETE, nid);
     let _ = DestroyIcon(nid.hIcon);
@@ -176,12 +170,7 @@ pub unsafe fn show_context_menu(
     append_item(hmenu, IDM_START_WITH_WINDOWS, "Start with Windows", cfg.start_with_windows);
     AppendMenuW(hmenu, MF_SEPARATOR, 0, None).ok();
 
-    append_item(
-        hmenu,
-        IDM_ABOUT,
-        &format!("{} {} on GitHub", app_info::APP_NAME, env!("CARGO_PKG_VERSION")),
-        false,
-    );
+    append_item(hmenu, IDM_ABOUT, "GitHub", false);
     append_item(hmenu, IDM_EXIT, "Exit", false);
 
     // 메뉴를 띄우기 전 전경 창이 되어야 바깥 클릭 시 메뉴가 닫힌다

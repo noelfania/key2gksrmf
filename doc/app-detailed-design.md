@@ -218,7 +218,9 @@ flowchart TD
 - 에디터 왼쪽에 자체 window class(`k2g_gutter`)의 자식 창을 배치하고 `WM_PAINT`에서 직접 그린다
 - `EM_GETFIRSTVISIBLELINE` → `EM_LINEINDEX`로 시각행 시작 문자 인덱스를 얻고, 그 이전 개행 수로 **논리 행 번호** 계산
 - Wrap으로 꺾인 연속 시각행에는 번호를 표시하지 않음 (논리 행 첫 시각행에만 표시)
-- **현재 커서 행 강조**: `EM_GETSEL` 캐럿 위치의 논리 행 번호를 본문 글자색으로, 나머지는 `line_number` 색으로 표시
+- **현재 커서 행 강조**: `EM_GETSEL` 캐럿 위치의 논리 행 번호를 상단바와 같은 accent 색 굵은 글씨(에디터 폰트 `LOGFONTW`에서 `FW_BOLD`로 만든 폰트)로, 나머지는 `line_number` 색으로 표시
+- **숫자 고정 폭**: 일반·굵은 폰트에서 `0`~`9` 중 가장 넓은 폭을 칸 폭으로 잡고 숫자를 한 글자씩 칸 가운데에 그려 자릿수 정렬을 맞춘다 (비례폭 폰트에서 `1`이 좁아 `11`이 치우치는 문제)
+- **클릭 시 행 선택**: `WM_LBUTTONDOWN`에서 y를 시각행으로 바꿔 부모에 `WM_COMMAND(IDC_GUTTER_LINE)`을 보내고, 메인 창이 조합을 확정한 뒤 그 시각행이 속한 논리 행 전체(개행 제외, 캐럿이 그 행에 남아 강조도 유지)를 선택해 에디터로 포커스를 돌린다
 - 행 높이는 에디터 폰트(`WM_GETFONT`)의 `GetTextMetricsW` 기준, `EM_GETRECT` 상단 오프셋으로 정렬 (에디터 상단 패딩과 자동 동기화)
 - 갱신: `EN_CHANGE`/`EN_VSCROLL`, `WM_SIZE`, `edit_proc`의 키·마우스·스크롤 처리 후 `InvalidateRect`
 
@@ -260,7 +262,7 @@ Open key2gksrmf        Ctrl+Alt+Shift+G   ← 굵은 기본 항목, 창이 보�
 ✓ Global Hotkey (Ctrl+Alt+Shift+G)
 ✓ Start with Windows
 ──────────────────
-key2gksrmf {version} on GitHub
+GitHub
 Exit
 ```
 
@@ -268,7 +270,7 @@ Exit
 - `TrackPopupMenu` 뒤 `PostMessage(WM_NULL)` (메뉴가 닫히지 않는 문제 방지)
 - 다크 메뉴: uxtheme ordinal 135 `SetPreferredAppMode(AllowDark)`, 테마 변경 시 136 `FlushMenuThemes`. 비공개 API라 실패해도 무시
 - 아이콘: 작업 표시줄 테마(`SystemUsesLightTheme`)에 따라 검은/흰 '나', `LoadIconMetric(LIM_SMALL)`로 DPI 크기
-- 툴팁: `key2gksrmf — 한` / `— A` (현재 입력 모드)
+- 툴팁: `key2gksrmf` (입력 모드는 표시하지 않음)
 - 탐색기 재시작(`TaskbarCreated`) 시 아이콘 재등록
 
 ### 5.6 전역 단축키 (Ctrl+Alt+Shift+G)

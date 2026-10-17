@@ -105,24 +105,13 @@ unsafe fn commit_composition() {
     input().commit();
 }
 
-fn tray_tip(mode: InputMode) -> String {
-    let mode_label = match mode {
-        InputMode::Han => "한",
-        InputMode::Eng => "A",
-    };
-    format!("{} — {}", app_info::APP_NAME, mode_label)
-}
-
-/// 입력 모드·Wrap·항상 위 상태를 상단바와 트레이 툴팁에 반영한다.
+/// 입력 모드·Wrap·항상 위 상태를 상단바에 반영한다.
 unsafe fn sync_toolbar() {
     let mode = input().mode();
     let (wrap, topmost) = G_CONFIG
         .as_ref()
         .map_or((true, false), |c| (c.word_wrap, c.always_on_top));
     editor_window::toolbar_set_state(mode == InputMode::Han, wrap, topmost);
-    if let Some(nid) = G_NOTIFY_ICON_DATA.as_mut() {
-        tray_manager::set_tray_tip(nid, &tray_tip(mode));
-    }
 }
 
 unsafe fn get_edit_text(hwnd: HWND) -> String {
@@ -540,7 +529,7 @@ unsafe fn run() {
     G_NOTIFY_ICON_DATA = Some(tray_manager::register_tray_icon(
         hwnd,
         hinstance,
-        &tray_tip(input().mode()),
+        app_info::APP_NAME,
     ));
 
     // 최초 실행 시에도 바로 입력할 수 있게 창을 띄운다
@@ -791,6 +780,15 @@ unsafe extern "system" fn wnd_proc(
                     if notif == BN_CLICKED as u16 {
                         toggle_word_wrap(hwnd);
                     }
+                }
+                editor_window::IDC_GUTTER_LINE => {
+                    // 행 번호 클릭: 조합을 확정한 뒤 그 논리 행 전체를 선택
+                    commit_composition();
+                    if let Some((start, end)) = editor_window::gutter_click_selection() {
+                        set_selection(G_HWND_EDIT, start, end);
+                    }
+                    focus_editor();
+                    editor_window::invalidate_gutter();
                 }
                 IDM_TOGGLE_WINDOW => {
                     if IsWindowVisible(hwnd).as_bool() {
