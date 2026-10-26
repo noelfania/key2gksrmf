@@ -1,5 +1,5 @@
 // 에디터 창 생성 및 리사이즈/스크롤 관리 모듈
-// 상단바(한/A 세그먼트·Wrap·항상 위)·행 번호 거터·EDIT 컨트롤, 라이트/다크 팔레트, DPI 배율
+// 상단바(한/A 세그먼트·Wrap·투명도·항상 위)·행 번호 거터·EDIT 컨트롤, 라이트/다크 팔레트, DPI 배율
 
 use windows::{
     core::*,
@@ -19,8 +19,8 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::Controls::{
             InitCommonControlsEx, SetWindowTheme, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX,
-            TTF_SUBCLASS, TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTS_ALWAYSTIP, TTS_NOPREFIX,
-            TTTOOLINFOW,
+            TTF_SUBCLASS, TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTM_UPDATETIPTEXTW, TTS_ALWAYSTIP,
+            TTS_NOPREFIX, TTTOOLINFOW,
         },
         UI::Input::KeyboardAndMouse::{
             ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
@@ -38,6 +38,7 @@ pub const IDC_MODE_HAN: u32 = 2002;
 pub const IDC_MODE_ENG: u32 = 2003;
 pub const IDC_WORD_WRAP_CHECK: u32 = 2004;
 pub const IDC_GUTTER_LINE: u32 = 2005;
+pub const IDC_OPACITY_BUTTON: u32 = 2006;
 
 // ---------- DPI 배율 (치수는 모두 96 DPI 기준 값) ----------
 
@@ -72,7 +73,7 @@ pub unsafe fn gutter_width() -> i32 {
 
 /// 상단바 컨트롤이 겹치지 않는 최소 클라이언트 폭 (배지는 숨겨진 상태 기준).
 pub unsafe fn min_client_width() -> i32 {
-    let toolbar = TB_MARGIN + SEG_CELL_W * 2 + 16 + BTN_W + BTN_GAP + BTN_W + TB_MARGIN;
+    let toolbar = TB_MARGIN + SEG_CELL_W * 2 + 16 + (BTN_W + BTN_GAP) * 2 + BTN_W + TB_MARGIN;
     px(toolbar.max(240))
 }
 
@@ -325,6 +326,7 @@ const BADGE_GAP: i32 = 8;
 const GLYPH_WRAP: &str = "\u{E751}";
 const GLYPH_PIN: &str = "\u{E718}";
 const GLYPH_PINNED: &str = "\u{E840}";
+const GLYPH_OPACITY: &str = "\u{E793}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Part {
@@ -332,15 +334,18 @@ enum Part {
     Eng,
     ModeBadge,
     Wrap,
+    Opacity,
     Pin,
 }
 
-const ALL_PARTS: [Part; 5] = [Part::Han, Part::Eng, Part::ModeBadge, Part::Wrap, Part::Pin];
+const ALL_PARTS: [Part; 6] =
+    [Part::Han, Part::Eng, Part::ModeBadge, Part::Wrap, Part::Opacity, Part::Pin];
 
 struct ToolbarState {
     han: bool,
     wrap: bool,
     topmost: bool,
+    transparency: u8,
     hover: Option<Part>,
     pressed: Option<Part>,
     tracking_leave: bool,
@@ -350,6 +355,7 @@ static mut G_TOOLBAR: ToolbarState = ToolbarState {
     han: true,
     wrap: true,
     topmost: false,
+    transparency: 0,
     hover: None,
     pressed: None,
     tracking_leave: false,
@@ -442,6 +448,7 @@ struct ToolbarLayout {
     mode_badge: Option<RECT>,
     wrap: RECT,
     wrap_badge: Option<RECT>,
+    opacity: RECT,
     pin: RECT,
 }
 
@@ -452,6 +459,7 @@ impl ToolbarLayout {
             Part::Eng => Some(self.eng),
             Part::ModeBadge => self.mode_badge,
             Part::Wrap => Some(self.wrap),
+            Part::Opacity => Some(self.opacity),
             Part::Pin => Some(self.pin),
         }
     }
@@ -479,12 +487,13 @@ unsafe fn toolbar_layout(width: i32) -> ToolbarLayout {
     let wrap_full_w = btn_w + wrap_badge_w + px(4);
     // 배지까지 모두 들어갈 폭이 아니면 배지를 숨긴다
     let needed = margin * 2 + cell_w * 2 + px(BADGE_GAP) + mode_badge_w + px(16)
-        + wrap_full_w + px(BTN_GAP) + btn_w;
+        + wrap_full_w + (px(BTN_GAP) + btn_w) * 2;
     let show_badges = width >= needed;
 
     let pin = rect_xywh(width - margin - btn_w, y, btn_w, ctrl_h);
     let wrap_w = if show_badges { wrap_full_w } else { btn_w };
-    let wrap = rect_xywh(pin.left - px(BTN_GAP) - wrap_w, y, wrap_w, ctrl_h);
+    let opacity = rect_xywh(pin.left - px(BTN_GAP) - btn_w, y, btn_w, ctrl_h);
+    let wrap = rect_xywh(opacity.left - px(BTN_GAP) - wrap_w, y, wrap_w, ctrl_h);
 
     ToolbarLayout {
         segment,
@@ -495,6 +504,7 @@ unsafe fn toolbar_layout(width: i32) -> ToolbarLayout {
         wrap,
         wrap_badge: show_badges
             .then(|| rect_xywh(wrap.left + btn_w - px(2), badge_y, wrap_badge_w, badge_h)),
+        opacity,
         pin,
     }
 }
@@ -513,11 +523,15 @@ unsafe fn hit_test(hwnd: HWND, x: i32, y: i32) -> Option<Part> {
         .find(|&p| layout.rect(p).is_some_and(|r| PtInRect(&r, pt).as_bool()))
 }
 
-/// 모드·Wrap·항상 위 상태를 상단바에 반영한다.
-pub unsafe fn toolbar_set_state(han: bool, wrap: bool, topmost: bool) {
+/// 모드·Wrap·항상 위·투명도 상태를 상단바에 반영한다.
+pub unsafe fn toolbar_set_state(han: bool, wrap: bool, topmost: bool, transparency: u8) {
     G_TOOLBAR.han = han;
     G_TOOLBAR.wrap = wrap;
     G_TOOLBAR.topmost = topmost;
+    if G_TOOLBAR.transparency != transparency {
+        G_TOOLBAR.transparency = transparency;
+        update_tooltip_text(Part::Opacity);
+    }
     if G_TOOLBAR_HWND != HWND(0 as _) {
         let _ = InvalidateRect(G_TOOLBAR_HWND, None, false);
     }
@@ -535,6 +549,7 @@ unsafe fn part_command(part: Part) -> u32 {
             }
         }
         Part::Wrap => IDC_WORD_WRAP_CHECK,
+        Part::Opacity => IDC_OPACITY_BUTTON,
         Part::Pin => IDC_ALWAYS_ON_TOP_CHECK,
     }
 }
@@ -761,8 +776,13 @@ unsafe fn paint_toolbar(hwnd: HWND) {
             }
         }
 
-        // Wrap·항상 위 토글 버튼
-        for (part, on) in [(Part::Wrap, st.wrap), (Part::Pin, st.topmost)] {
+        // Wrap·투명도·항상 위 토글 버튼
+        let toggles = [
+            (Part::Wrap, st.wrap),
+            (Part::Opacity, st.transparency > 0),
+            (Part::Pin, st.topmost),
+        ];
+        for (part, on) in toggles {
             let r = layout.rect(part).unwrap();
             let radius = px(BTN_RADIUS as i32) as f32;
             let fill = match (on, is_pressed(part), is_hover(part)) {
@@ -803,6 +823,8 @@ unsafe fn paint_toolbar(hwnd: HWND) {
 
         let wrap_icon = RECT { right: layout.wrap.left + px(BTN_W), ..layout.wrap };
         draw_text_centered(hdc, fonts.icon, GLYPH_WRAP, wrap_icon, if st.wrap { t.accent } else { t.text });
+        let opacity_color = if st.transparency > 0 { t.accent } else { t.text };
+        draw_text_centered(hdc, fonts.icon, GLYPH_OPACITY, layout.opacity, opacity_color);
         let pin_glyph = if st.topmost { GLYPH_PINNED } else { GLYPH_PIN };
         draw_text_centered(hdc, fonts.icon, pin_glyph, layout.pin, if st.topmost { t.accent } else { t.text });
 
@@ -823,14 +845,42 @@ unsafe fn paint_toolbar(hwnd: HWND) {
 
 // --- 상단바 툴팁 (영역별) ---
 
-fn part_tooltip(part: Part) -> String {
+unsafe fn part_tooltip(part: Part) -> String {
     match part {
         Part::Han | Part::Eng | Part::ModeBadge => {
             format!("Hangul / English  ({})", app_info::SHORTCUT_TOGGLE_MODE)
         }
         Part::Wrap => format!("Word wrap  ({})", app_info::SHORTCUT_WORD_WRAP),
+        Part::Opacity => format!("Transparency  ({}%)", G_TOOLBAR.transparency),
         Part::Pin => "Always on top".to_string(),
     }
+}
+
+/// 상태에 따라 바뀌는 툴팁 문구를 다시 넣는다.
+unsafe fn update_tooltip_text(part: Part) {
+    if G_TOOLTIP_HWND == HWND(0 as _) {
+        return;
+    }
+    let text: Vec<u16> = part_tooltip(part).encode_utf16().chain(std::iter::once(0)).collect();
+    let ti = TTTOOLINFOW {
+        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+        hwnd: G_TOOLBAR_HWND,
+        uId: part as usize,
+        lpszText: PWSTR(text.as_ptr() as *mut u16),
+        ..Default::default()
+    };
+    SendMessageW(G_TOOLTIP_HWND, TTM_UPDATETIPTEXTW, WPARAM(0), LPARAM(&ti as *const _ as isize));
+}
+
+/// 투명도 버튼의 화면 좌표 (슬라이더 팝업 위치 기준).
+pub unsafe fn opacity_button_screen_rect() -> RECT {
+    if G_TOOLBAR_HWND == HWND(0 as _) {
+        return RECT::default();
+    }
+    let r = toolbar_layout(client_width(G_TOOLBAR_HWND)).opacity;
+    let mut pts = [POINT { x: r.left, y: r.top }, POINT { x: r.right, y: r.bottom }];
+    MapWindowPoints(G_TOOLBAR_HWND, None, &mut pts);
+    RECT { left: pts[0].x, top: pts[0].y, right: pts[1].x, bottom: pts[1].y }
 }
 
 unsafe fn create_toolbar_tooltips(owner: HWND, toolbar: HWND, hinstance: HINSTANCE) {

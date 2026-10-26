@@ -14,6 +14,7 @@ mod input_controller;
 mod startup_registry;
 mod system_theme;
 mod tray_manager;
+mod window_opacity;
 
 use windows::{
     core::*,
@@ -57,6 +58,9 @@ const DWMWA_USE_IMMERSIVE_DARK_MODE: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(20)
 const HOTKEY_ID_OPEN: i32 = 1;
 // 트레이 클릭 직전까지 창이 활성 상태였다고 볼 시간 (ms)
 const TRAY_TOGGLE_ACTIVE_WINDOW_MS: u32 = 500;
+// 투명할 때 창 뒤 밝기를 재는 타이머
+const TIMER_ID_BACKDROP: usize = 1;
+const BACKDROP_SAMPLE_MS: u32 = 700;
 
 // 전역 상태 (Win32 콜백에서 접근하기 위해 전역으로 관리)
 static mut G_HWND_MAIN: HWND = HWND(0 as _);
@@ -74,6 +78,8 @@ static mut G_WM_TASKBAR_CREATED: u32 = 0;
 // 트레이 클릭 토글 판정용 시각 (GetTickCount)
 static mut G_LAST_DEACTIVATE_TICK: u32 = 0;
 static mut G_LAST_TRAY_SHOW_TICK: u32 = 0;
+// 투명할 때 창 뒤 밝기로 고른 팔레트 (None이면 Windows 테마를 따른다)
+static mut G_BACKDROP_DARK: Option<bool> = None;
 
 // 물리키 기반 조합 상태 (모드·조합 추적·WM_CHAR 억제)
 static mut G_INPUT: Option<InputController> = None;
@@ -105,13 +111,13 @@ unsafe fn commit_composition() {
     input().commit();
 }
 
-/// 입력 모드·Wrap·항상 위 상태를 상단바에 반영한다.
+/// 입력 모드·Wrap·항상 위·투명도 상태를 상단바에 반영한다.
 unsafe fn sync_toolbar() {
     let mode = input().mode();
-    let (wrap, topmost) = G_CONFIG
+    let (wrap, topmost, transparency) = G_CONFIG
         .as_ref()
-        .map_or((true, false), |c| (c.word_wrap, c.always_on_top));
-    editor_window::toolbar_set_state(mode == InputMode::Han, wrap, topmost);
+        .map_or((true, false, 0), |c| (c.word_wrap, c.always_on_top, c.transparency));
+    editor_window::toolbar_set_state(mode == InputMode::Han, wrap, topmost, transparency);
 }
 
 unsafe fn get_edit_text(hwnd: HWND) -> String {
@@ -325,9 +331,9 @@ unsafe fn apply_window_icons(hwnd: HWND) {
     }
 }
 
-/// Windows 라이트/다크·강조색에 맞춰 창 전체를 다시 칠한다.
+/// Windows 라이트/다크(투명할 때는 창 뒤 밝기)·강조색에 맞춰 창 전체를 다시 칠한다.
 unsafe fn apply_theme(hwnd: HWND) {
-    let dark = !system_theme::apps_are_light();
+    let dark = effective_dark();
     if let Some(cfg) = G_CONFIG.as_ref() {
         editor_window::init_theme(cfg, dark, system_theme::control_accent_color(dark));
     }
@@ -339,6 +345,7 @@ unsafe fn apply_theme(hwnd: HWND) {
     }
     editor_window::apply_control_theme(G_HWND_EDIT);
     editor_window::refresh_toolbar_theme();
+    window_opacity::refresh_slider_theme();
     system_theme::flush_menu_themes();
     let _ = RedrawWindow(
         hwnd,
@@ -541,6 +548,9 @@ unsafe fn run() {
 
     let mut msg = MSG::default();
     while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        if window_opacity::pre_translate(&msg) {
+            continue;
+        }
         // F1(한/영 전환)은 포커스 위치와 상관없이 여기서 한 번만 처리한다
         if msg.message == WM_KEYDOWN && msg.wParam.0 as u32 == VK_F1 {
             toggle_input_mode_and_focus_editor();
@@ -587,6 +597,56 @@ unsafe fn toggle_always_on_top(hwnd: HWND) {
     config_store::save(cfg);
     editor_window::apply_always_on_top(hwnd, cfg.always_on_top);
     sync_toolbar();
+}
+
+/// 투명도(%)를 바꾼다. 슬라이더를 끄는 동안에는 `save` 없이 미리보기만 한다.
+unsafe fn set_transparency(hwnd: HWND, transparency: u8, save: bool) {
+    let Some(cfg) = G_CONFIG.as_mut() else {
+        return;
+    };
+    let transparency = transparency.min(config_store::MAX_TRANSPARENCY);
+    cfg.transparency = transparency;
+    if save {
+        config_store::save(cfg);
+    }
+    window_opacity::apply(hwnd, transparency);
+    update_backdrop_tracking(hwnd, IsWindowVisible(hwnd).as_bool());
+    sync_toolbar();
+}
+
+unsafe fn on_slider_change(transparency: u8, commit: bool) {
+    set_transparency(G_HWND_MAIN, transparency, commit);
+}
+
+/// 투명하고 보이는 동안만 창 뒤 밝기를 주기적으로 잰다. 불투명해지면 Windows 테마로 돌아간다.
+unsafe fn update_backdrop_tracking(hwnd: HWND, visible: bool) {
+    let transparent = G_CONFIG.as_ref().is_some_and(|c| c.transparency > 0);
+    if transparent && visible {
+        SetTimer(hwnd, TIMER_ID_BACKDROP, BACKDROP_SAMPLE_MS, None);
+        sample_backdrop(hwnd);
+    } else {
+        let _ = KillTimer(hwnd, TIMER_ID_BACKDROP);
+        if !transparent && G_BACKDROP_DARK.take().is_some() {
+            apply_theme(hwnd);
+        }
+    }
+}
+
+unsafe fn sample_backdrop(hwnd: HWND) {
+    let Some(luminance) = window_opacity::sample_backdrop_luminance(hwnd) else {
+        return;
+    };
+    let current = effective_dark();
+    let dark = window_opacity::decide_dark(current, luminance);
+    G_BACKDROP_DARK = Some(dark);
+    if dark != current {
+        apply_theme(hwnd);
+    }
+}
+
+/// 투명하면 창 뒤 밝기로 고른 팔레트, 아니면 Windows 앱 테마.
+unsafe fn effective_dark() -> bool {
+    G_BACKDROP_DARK.unwrap_or_else(|| !system_theme::apps_are_light())
 }
 
 unsafe fn toggle_start_with_windows() {
@@ -698,6 +758,7 @@ unsafe extern "system" fn wnd_proc(
                 if cfg.always_on_top {
                     editor_window::apply_always_on_top(hwnd, true);
                 }
+                window_opacity::apply(hwnd, cfg.transparency);
             }
 
             apply_font_to_edit(G_HWND_EDIT);
@@ -776,6 +837,17 @@ unsafe extern "system" fn wnd_proc(
                         focus_editor();
                     }
                 }
+                editor_window::IDC_OPACITY_BUTTON => {
+                    if notif == BN_CLICKED as u16 {
+                        let current = G_CONFIG.as_ref().map_or(0, |c| c.transparency);
+                        window_opacity::toggle_slider(
+                            hwnd,
+                            editor_window::opacity_button_screen_rect(),
+                            current,
+                            on_slider_change,
+                        );
+                    }
+                }
                 editor_window::IDC_WORD_WRAP_CHECK => {
                     if notif == BN_CLICKED as u16 {
                         toggle_word_wrap(hwnd);
@@ -847,6 +919,26 @@ unsafe extern "system" fn wnd_proc(
             } else {
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
+        }
+
+        WM_SHOWWINDOW => {
+            // 보이기 직전에 재 두면 처음 뜰 때 팔레트가 바뀌며 깜빡이지 않는다
+            update_backdrop_tracking(hwnd, wparam.0 != 0);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+
+        WM_TIMER => {
+            if wparam.0 == TIMER_ID_BACKDROP {
+                sample_backdrop(hwnd);
+            }
+            LRESULT(0)
+        }
+
+        WM_EXITSIZEMOVE => {
+            if G_CONFIG.as_ref().is_some_and(|c| c.transparency > 0) {
+                sample_backdrop(hwnd);
+            }
+            LRESULT(0)
         }
 
         WM_SETTINGCHANGE => {

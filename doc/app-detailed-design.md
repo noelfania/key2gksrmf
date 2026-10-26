@@ -185,9 +185,10 @@ flowchart TD
 | `A` 칸 | `IDC_MODE_ENG` (2003) | |
 | `F1` 배지 | 현재 모드의 반대 | 단축키 표시 겸 토글 |
 | Wrap (↵ `E751`) + `Alt+Z` 배지 | `IDC_WORD_WRAP_CHECK` (2004) | 켜짐: 옅은 강조색 배경 + 강조색 아이콘 |
+| 투명도 (`E793`) | `IDC_OPACITY_BUTTON` (2006) | 슬라이더 팝업 토글. 투명도 > 0이면 켜짐 표시, 툴팁에 현재 % |
 | 항상 위 (핀 `E718`/`E840`) | `IDC_ALWAYS_ON_TOP_CHECK` (2001) | 트레이 메뉴와 동기화 |
 
-- 상태는 `editor_window::toolbar_set_state(han, wrap, topmost)`로 반영 (`main::sync_toolbar`)
+- 상태는 `editor_window::toolbar_set_state(han, wrap, topmost, transparency)`로 반영 (`main::sync_toolbar`)
 - hover/press는 `TrackMouseEvent`·`SetCapture`로 추적, 눌렀다 같은 영역에서 떼면 실행
 - 창이 좁아 모두 들어가지 않으면 단축키 배지부터 숨긴다 (툴팁에는 계속 단축키 표시)
 - 툴팁: `tooltips_class32` 하나에 영역별 rect 도구(`TTF_SUBCLASS`), 리사이즈 시 `TTM_NEWTOOLRECTW`
@@ -242,6 +243,18 @@ flowchart TD
 
 - `WS_EX_TOPMOST` / `SetWindowPos(HWND_TOPMOST)` 토글
 - 상단바 핀 토글·트레이 메뉴·`AppConfig.always_on_top` 동기화
+
+#### 창 투명도 (`window_opacity.rs`)
+
+- `AppConfig.transparency` (0~80%, 상한 `config_store::MAX_TRANSPARENCY`). 0이면 `WS_EX_LAYERED`를 떼고, 그 외에는 `SetLayeredWindowAttributes(LWA_ALPHA)`로 창 전체(글자 포함)에 같은 알파를 준다
+- 슬라이더 팝업: 메인 창을 owner로 하는 `WS_POPUP`(항상 위면 `WS_EX_TOPMOST`도) + `msctls_trackbar32`(0~80, 페이지 10). 끄는 동안 `set_transparency(save=false)`로 미리보기, 닫힐 때 한 번 저장
+  - 닫기: 바깥 클릭(`WA_INACTIVE` → `WM_CLOSE` 게시)·Enter는 확정, Esc는 연 시점 값으로 되돌림 (메시지 루프의 `window_opacity::pre_translate`)
+  - 바깥 클릭이 투명도 버튼이면 닫힌 직후 300ms 동안 다시 열지 않는다 (같은 클릭으로 재오픈 방지)
+- **자동 라이트/다크**: 투명하고 창이 보이는 동안 700ms 타이머(`TIMER_ID_BACKDROP`)와 `WM_EXITSIZEMOVE`·`WM_SHOWWINDOW`에서 창 영역 화면을 16×16으로 `StretchBlt(HALFTONE)`해 평균 밝기를 잰다
+  - `CAPTUREBLT` 없이 복사하면 레이어드 창(투명한 이 창)은 캡처에서 빠지므로 창 뒤 화면만 잡힌다
+  - 밝기 < 0.40이면 다크, > 0.60이면 라이트, 그 사이는 현재 유지 (히스테리시스, `decide_dark`)
+  - 결과는 `main::G_BACKDROP_DARK`, `effective_dark()`가 `apply_theme`의 dark 값을 정한다. 투명도를 0으로 되돌리면 `None`으로 지우고 Windows 테마로 복귀
+  - 픽셀 단위 반전이 아니라 창 전체 팔레트 전환이다 (EDIT 컨트롤이 그리는 글자를 픽셀별로 바꿀 수 없음)
 
 ### 5.5 트레이
 
@@ -337,6 +350,7 @@ flowchart TD
   "start_with_windows": false,
   "word_wrap": true,
   "global_hotkey_open": false,
+  "transparency": 0,
   "colors": {
     "gutter_background": "#F3F3F3",
     "line_number": "#8A8A8A",
