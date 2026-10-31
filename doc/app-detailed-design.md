@@ -185,9 +185,10 @@ flowchart TD
 | `A` 칸 | `IDC_MODE_ENG` (2003) | |
 | `F1` 배지 | 현재 모드의 반대 | 단축키 표시 겸 토글 |
 | Wrap (↵ `E751`) + `Alt+Z` 배지 | `IDC_WORD_WRAP_CHECK` (2004) | 켜짐: 옅은 강조색 배경 + 강조색 아이콘 |
+| 투명도 (`E793`) | `IDC_OPACITY_BUTTON` (2006) | 슬라이더 팝업 토글. 투명도 > 0이면 켜짐 표시, 툴팁에 현재 % |
 | 항상 위 (핀 `E718`/`E840`) | `IDC_ALWAYS_ON_TOP_CHECK` (2001) | 트레이 메뉴와 동기화 |
 
-- 상태는 `editor_window::toolbar_set_state(han, wrap, topmost)`로 반영 (`main::sync_toolbar`)
+- 상태는 `editor_window::toolbar_set_state(han, wrap, topmost, transparency)`로 반영 (`main::sync_toolbar`)
 - hover/press는 `TrackMouseEvent`·`SetCapture`로 추적, 눌렀다 같은 영역에서 떼면 실행
 - 창이 좁아 모두 들어가지 않으면 단축키 배지부터 숨긴다 (툴팁에는 계속 단축키 표시)
 - 툴팁: `tooltips_class32` 하나에 영역별 rect 도구(`TTF_SUBCLASS`), 리사이즈 시 `TTM_NEWTOOLRECTW`
@@ -218,7 +219,9 @@ flowchart TD
 - 에디터 왼쪽에 자체 window class(`k2g_gutter`)의 자식 창을 배치하고 `WM_PAINT`에서 직접 그린다
 - `EM_GETFIRSTVISIBLELINE` → `EM_LINEINDEX`로 시각행 시작 문자 인덱스를 얻고, 그 이전 개행 수로 **논리 행 번호** 계산
 - Wrap으로 꺾인 연속 시각행에는 번호를 표시하지 않음 (논리 행 첫 시각행에만 표시)
-- **현재 커서 행 강조**: `EM_GETSEL` 캐럿 위치의 논리 행 번호를 본문 글자색으로, 나머지는 `line_number` 색으로 표시
+- **현재 커서 행 강조**: `EM_GETSEL` 캐럿 위치의 논리 행 번호를 상단바와 같은 accent 색 굵은 글씨(에디터 폰트 `LOGFONTW`에서 `FW_BOLD`로 만든 폰트)로, 나머지는 `line_number` 색으로 표시
+- **숫자 고정 폭**: 일반·굵은 폰트에서 `0`~`9` 중 가장 넓은 폭을 칸 폭으로 잡고 숫자를 한 글자씩 칸 가운데에 그려 자릿수 정렬을 맞춘다 (비례폭 폰트에서 `1`이 좁아 `11`이 치우치는 문제)
+- **클릭 시 행 선택**: `WM_LBUTTONDOWN`에서 y를 시각행으로 바꿔 부모에 `WM_COMMAND(IDC_GUTTER_LINE)`을 보내고, 메인 창이 조합을 확정한 뒤 그 시각행이 속한 논리 행 전체(개행 제외, 캐럿이 그 행에 남아 강조도 유지)를 선택해 에디터로 포커스를 돌린다
 - 행 높이는 에디터 폰트(`WM_GETFONT`)의 `GetTextMetricsW` 기준, `EM_GETRECT` 상단 오프셋으로 정렬 (에디터 상단 패딩과 자동 동기화)
 - 갱신: `EN_CHANGE`/`EN_VSCROLL`, `WM_SIZE`, `edit_proc`의 키·마우스·스크롤 처리 후 `InvalidateRect`
 
@@ -241,6 +244,13 @@ flowchart TD
 - `WS_EX_TOPMOST` / `SetWindowPos(HWND_TOPMOST)` 토글
 - 상단바 핀 토글·트레이 메뉴·`AppConfig.always_on_top` 동기화
 
+#### 창 투명도 (`window_opacity.rs`)
+
+- `AppConfig.transparency` (0~80%, 상한 `config_store::MAX_TRANSPARENCY`). 0이면 `WS_EX_LAYERED`를 떼고, 그 외에는 `SetLayeredWindowAttributes(LWA_ALPHA)`로 창 전체(글자 포함)에 같은 알파를 준다
+- 슬라이더 팝업: 메인 창을 owner로 하는 `WS_POPUP`(항상 위면 `WS_EX_TOPMOST`도) + `msctls_trackbar32`(0~80, 페이지 10). 끄는 동안 `set_transparency(save=false)`로 미리보기, 닫힐 때 한 번 저장
+  - 닫기: 바깥 클릭(`WA_INACTIVE` → `WM_CLOSE` 게시)·Enter는 확정, Esc는 연 시점 값으로 되돌림 (메시지 루프의 `window_opacity::pre_translate`)
+  - 바깥 클릭이 투명도 버튼이면 닫힌 직후 300ms 동안 다시 열지 않는다 (같은 클릭으로 재오픈 방지)
+
 ### 5.5 트레이
 
 `NOTIFYICON_VERSION_4`로 등록한다 (키보드 Win+B 접근, `WM_CONTEXTMENU` 기준 좌표).
@@ -260,7 +270,7 @@ Open key2gksrmf        Ctrl+Alt+Shift+G   ← 굵은 기본 항목, 창이 보�
 ✓ Global Hotkey (Ctrl+Alt+Shift+G)
 ✓ Start with Windows
 ──────────────────
-key2gksrmf {version} on GitHub
+GitHub
 Exit
 ```
 
@@ -268,7 +278,7 @@ Exit
 - `TrackPopupMenu` 뒤 `PostMessage(WM_NULL)` (메뉴가 닫히지 않는 문제 방지)
 - 다크 메뉴: uxtheme ordinal 135 `SetPreferredAppMode(AllowDark)`, 테마 변경 시 136 `FlushMenuThemes`. 비공개 API라 실패해도 무시
 - 아이콘: 작업 표시줄 테마(`SystemUsesLightTheme`)에 따라 검은/흰 '나', `LoadIconMetric(LIM_SMALL)`로 DPI 크기
-- 툴팁: `key2gksrmf — 한` / `— A` (현재 입력 모드)
+- 툴팁: `key2gksrmf` (입력 모드는 표시하지 않음)
 - 탐색기 재시작(`TaskbarCreated`) 시 아이콘 재등록
 
 ### 5.6 전역 단축키 (Ctrl+Alt+Shift+G)
@@ -335,6 +345,7 @@ flowchart TD
   "start_with_windows": false,
   "word_wrap": true,
   "global_hotkey_open": false,
+  "transparency": 0,
   "colors": {
     "gutter_background": "#F3F3F3",
     "line_number": "#8A8A8A",

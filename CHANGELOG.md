@@ -6,6 +6,20 @@ key2gksrmf의 버전별 변경 내역입니다. 형식은 [Keep a Changelog](htt
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-31
+
+### Added
+
+- 창 투명도: 상단바 항상 위(핀) 옆 버튼을 누르면 슬라이더가 열리고 투명도를 0~80%로 조절한다. Esc는 취소, Enter·바깥 클릭은 확정. `config.json`의 `transparency`에 저장.
+- 행 번호를 클릭하면 그 행 전체가 선택된다 (Wrap으로 꺾인 행은 논리 행 전체).
+
+### Changed
+
+- 행 번호 숫자를 같은 폭 칸에 그려 자릿수 정렬이 맞는다 (예: `11`이 오른쪽으로 치우치던 문제).
+- 현재 행 번호 강조를 본문색에서 상단바와 같은 파랑(시스템 accent) 굵은 글씨로 바꿨다.
+- 트레이 메뉴 `key2gksrmf {버전} on GitHub` → `GitHub`.
+- 트레이 툴팁에서 입력 모드 표시를 빼고 `key2gksrmf`만 표시한다.
+
 ## [0.2.1] - 2026-10-16
 
 ### Added
@@ -95,7 +109,8 @@ key2gksrmf의 버전별 변경 내역입니다. 형식은 [Keep a Changelog](htt
 
 - 첫 릴리스. 트레이 상주 에디터에서 물리키를 두벌식 한글로 조합.
 
-[Unreleased]: https://github.com/noelfania/key2gksrmf/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/noelfania/key2gksrmf/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/noelfania/key2gksrmf/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/noelfania/key2gksrmf/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/noelfania/key2gksrmf/compare/v0.1.1226...v0.2.0
 [0.1.1226]: https://github.com/noelfania/key2gksrmf/compare/v0.1.1224...v0.1.1226

@@ -34,6 +34,7 @@ key2gksrmf를 만들면서 마주한 문제, 검토, 해결 여부를 모아 둔
 | 문서 | 요약 |
 |---|---|
 | [07-deferred-features.md](07-deferred-features.md) | 줄 끝 기호, 시스템 폰트 설정 UI 등 |
+| [09-ppu-icon-candidate.md](09-ppu-icon-candidate.md) | '뿌' 예비 아이콘 파일과 적용 절차 |
 
 ### 미확인
 

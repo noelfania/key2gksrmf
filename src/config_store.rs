@@ -148,6 +148,9 @@ pub fn parse_hex_color(s: &str) -> Option<u32> {
     Some((b << 16) | (g << 8) | r)
 }
 
+/// 창 투명도 상한(%). 불투명도 20%까지만 내려간다.
+pub const MAX_TRANSPARENCY: u8 = 80;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
@@ -158,6 +161,9 @@ pub struct AppConfig {
     pub word_wrap: bool,
     #[serde(default)]
     pub global_hotkey_open: bool,
+    /// 창 투명도(%). 0 = 불투명, 최대 `MAX_TRANSPARENCY`.
+    #[serde(default)]
+    pub transparency: u8,
     #[serde(default)]
     pub colors: ColorConfig,
     #[serde(default)]
@@ -173,6 +179,7 @@ impl Default for AppConfig {
             start_with_windows: false,
             word_wrap: default_word_wrap(),
             global_hotkey_open: false,
+            transparency: 0,
             colors: ColorConfig::default(),
             colors_dark: DarkColorConfig::default(),
             window: WindowSize::default(),
@@ -204,6 +211,7 @@ pub fn load() -> AppConfig {
     };
     match serde_json::from_str::<AppConfig>(&text) {
         Ok(mut cfg) => {
+            cfg.transparency = cfg.transparency.min(MAX_TRANSPARENCY);
             // 구버전 `"colors": {}` 등 누락 키를 기본 HEX로 채우고 저장
             let before = cfg.colors.clone();
             cfg.colors.fill_defaults();
@@ -316,6 +324,7 @@ mod tests {
         )
         .unwrap();
         // serde default = 함수가 각 필드에 적용된다
+        assert_eq!(cfg.transparency, 0);
         assert_eq!(
             cfg.colors.gutter_background.as_deref(),
             Some(DEFAULT_GUTTER_BACKGROUND)

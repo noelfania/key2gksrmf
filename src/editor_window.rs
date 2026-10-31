@@ -1,5 +1,5 @@
 // 에디터 창 생성 및 리사이즈/스크롤 관리 모듈
-// 상단바(한/A 세그먼트·Wrap·항상 위)·행 번호 거터·EDIT 컨트롤, 라이트/다크 팔레트, DPI 배율
+// 상단바(한/A 세그먼트·Wrap·투명도·항상 위)·행 번호 거터·EDIT 컨트롤, 라이트/다크 팔레트, DPI 배율
 
 use windows::{
     core::*,
@@ -19,8 +19,8 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::Controls::{
             InitCommonControlsEx, SetWindowTheme, ICC_BAR_CLASSES, INITCOMMONCONTROLSEX,
-            TTF_SUBCLASS, TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTS_ALWAYSTIP, TTS_NOPREFIX,
-            TTTOOLINFOW,
+            TTF_SUBCLASS, TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTM_UPDATETIPTEXTW, TTS_ALWAYSTIP,
+            TTS_NOPREFIX, TTTOOLINFOW,
         },
         UI::Input::KeyboardAndMouse::{
             ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
@@ -37,6 +37,8 @@ pub const IDC_ALWAYS_ON_TOP_CHECK: u32 = 2001;
 pub const IDC_MODE_HAN: u32 = 2002;
 pub const IDC_MODE_ENG: u32 = 2003;
 pub const IDC_WORD_WRAP_CHECK: u32 = 2004;
+pub const IDC_GUTTER_LINE: u32 = 2005;
+pub const IDC_OPACITY_BUTTON: u32 = 2006;
 
 // ---------- DPI 배율 (치수는 모두 96 DPI 기준 값) ----------
 
@@ -71,7 +73,7 @@ pub unsafe fn gutter_width() -> i32 {
 
 /// 상단바 컨트롤이 겹치지 않는 최소 클라이언트 폭 (배지는 숨겨진 상태 기준).
 pub unsafe fn min_client_width() -> i32 {
-    let toolbar = TB_MARGIN + SEG_CELL_W * 2 + 16 + BTN_W + BTN_GAP + BTN_W + TB_MARGIN;
+    let toolbar = TB_MARGIN + SEG_CELL_W * 2 + 16 + (BTN_W + BTN_GAP) * 2 + BTN_W + TB_MARGIN;
     px(toolbar.max(240))
 }
 
@@ -141,6 +143,8 @@ impl TextBuffer for EditBuffer {
 // 거터가 참조하는 에디터 핸들 (단일 인스턴스 앱이므로 모듈 전역으로 관리)
 static mut G_GUTTER_HWND: HWND = HWND(0 as _);
 static mut G_GUTTER_EDIT: HWND = HWND(0 as _);
+// 거터에서 마지막으로 클릭한 시각행 (IDC_GUTTER_LINE 처리 시 사용)
+static mut G_GUTTER_CLICK_LINE: i32 = -1;
 
 // ---------- 색상 테마 ----------
 
@@ -247,7 +251,7 @@ pub unsafe fn init_theme(cfg: &AppConfig, dark: bool, accent: COLORREF) {
         text,
         text_secondary,
         line_number,
-        line_number_current: text,
+        line_number_current: accent,
         editor_bg: editor,
         accent,
         on_accent,
@@ -322,6 +326,7 @@ const BADGE_GAP: i32 = 8;
 const GLYPH_WRAP: &str = "\u{E751}";
 const GLYPH_PIN: &str = "\u{E718}";
 const GLYPH_PINNED: &str = "\u{E840}";
+const GLYPH_OPACITY: &str = "\u{E793}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Part {
@@ -329,15 +334,18 @@ enum Part {
     Eng,
     ModeBadge,
     Wrap,
+    Opacity,
     Pin,
 }
 
-const ALL_PARTS: [Part; 5] = [Part::Han, Part::Eng, Part::ModeBadge, Part::Wrap, Part::Pin];
+const ALL_PARTS: [Part; 6] =
+    [Part::Han, Part::Eng, Part::ModeBadge, Part::Wrap, Part::Opacity, Part::Pin];
 
 struct ToolbarState {
     han: bool,
     wrap: bool,
     topmost: bool,
+    transparency: u8,
     hover: Option<Part>,
     pressed: Option<Part>,
     tracking_leave: bool,
@@ -347,6 +355,7 @@ static mut G_TOOLBAR: ToolbarState = ToolbarState {
     han: true,
     wrap: true,
     topmost: false,
+    transparency: 0,
     hover: None,
     pressed: None,
     tracking_leave: false,
@@ -439,6 +448,7 @@ struct ToolbarLayout {
     mode_badge: Option<RECT>,
     wrap: RECT,
     wrap_badge: Option<RECT>,
+    opacity: RECT,
     pin: RECT,
 }
 
@@ -449,6 +459,7 @@ impl ToolbarLayout {
             Part::Eng => Some(self.eng),
             Part::ModeBadge => self.mode_badge,
             Part::Wrap => Some(self.wrap),
+            Part::Opacity => Some(self.opacity),
             Part::Pin => Some(self.pin),
         }
     }
@@ -476,12 +487,13 @@ unsafe fn toolbar_layout(width: i32) -> ToolbarLayout {
     let wrap_full_w = btn_w + wrap_badge_w + px(4);
     // 배지까지 모두 들어갈 폭이 아니면 배지를 숨긴다
     let needed = margin * 2 + cell_w * 2 + px(BADGE_GAP) + mode_badge_w + px(16)
-        + wrap_full_w + px(BTN_GAP) + btn_w;
+        + wrap_full_w + (px(BTN_GAP) + btn_w) * 2;
     let show_badges = width >= needed;
 
     let pin = rect_xywh(width - margin - btn_w, y, btn_w, ctrl_h);
     let wrap_w = if show_badges { wrap_full_w } else { btn_w };
-    let wrap = rect_xywh(pin.left - px(BTN_GAP) - wrap_w, y, wrap_w, ctrl_h);
+    let opacity = rect_xywh(pin.left - px(BTN_GAP) - btn_w, y, btn_w, ctrl_h);
+    let wrap = rect_xywh(opacity.left - px(BTN_GAP) - wrap_w, y, wrap_w, ctrl_h);
 
     ToolbarLayout {
         segment,
@@ -492,6 +504,7 @@ unsafe fn toolbar_layout(width: i32) -> ToolbarLayout {
         wrap,
         wrap_badge: show_badges
             .then(|| rect_xywh(wrap.left + btn_w - px(2), badge_y, wrap_badge_w, badge_h)),
+        opacity,
         pin,
     }
 }
@@ -510,11 +523,15 @@ unsafe fn hit_test(hwnd: HWND, x: i32, y: i32) -> Option<Part> {
         .find(|&p| layout.rect(p).is_some_and(|r| PtInRect(&r, pt).as_bool()))
 }
 
-/// 모드·Wrap·항상 위 상태를 상단바에 반영한다.
-pub unsafe fn toolbar_set_state(han: bool, wrap: bool, topmost: bool) {
+/// 모드·Wrap·항상 위·투명도 상태를 상단바에 반영한다.
+pub unsafe fn toolbar_set_state(han: bool, wrap: bool, topmost: bool, transparency: u8) {
     G_TOOLBAR.han = han;
     G_TOOLBAR.wrap = wrap;
     G_TOOLBAR.topmost = topmost;
+    if G_TOOLBAR.transparency != transparency {
+        G_TOOLBAR.transparency = transparency;
+        update_tooltip_text(Part::Opacity);
+    }
     if G_TOOLBAR_HWND != HWND(0 as _) {
         let _ = InvalidateRect(G_TOOLBAR_HWND, None, false);
     }
@@ -532,6 +549,7 @@ unsafe fn part_command(part: Part) -> u32 {
             }
         }
         Part::Wrap => IDC_WORD_WRAP_CHECK,
+        Part::Opacity => IDC_OPACITY_BUTTON,
         Part::Pin => IDC_ALWAYS_ON_TOP_CHECK,
     }
 }
@@ -758,8 +776,13 @@ unsafe fn paint_toolbar(hwnd: HWND) {
             }
         }
 
-        // Wrap·항상 위 토글 버튼
-        for (part, on) in [(Part::Wrap, st.wrap), (Part::Pin, st.topmost)] {
+        // Wrap·투명도·항상 위 토글 버튼
+        let toggles = [
+            (Part::Wrap, st.wrap),
+            (Part::Opacity, st.transparency > 0),
+            (Part::Pin, st.topmost),
+        ];
+        for (part, on) in toggles {
             let r = layout.rect(part).unwrap();
             let radius = px(BTN_RADIUS as i32) as f32;
             let fill = match (on, is_pressed(part), is_hover(part)) {
@@ -800,6 +823,8 @@ unsafe fn paint_toolbar(hwnd: HWND) {
 
         let wrap_icon = RECT { right: layout.wrap.left + px(BTN_W), ..layout.wrap };
         draw_text_centered(hdc, fonts.icon, GLYPH_WRAP, wrap_icon, if st.wrap { t.accent } else { t.text });
+        let opacity_color = if st.transparency > 0 { t.accent } else { t.text };
+        draw_text_centered(hdc, fonts.icon, GLYPH_OPACITY, layout.opacity, opacity_color);
         let pin_glyph = if st.topmost { GLYPH_PINNED } else { GLYPH_PIN };
         draw_text_centered(hdc, fonts.icon, pin_glyph, layout.pin, if st.topmost { t.accent } else { t.text });
 
@@ -820,14 +845,42 @@ unsafe fn paint_toolbar(hwnd: HWND) {
 
 // --- 상단바 툴팁 (영역별) ---
 
-fn part_tooltip(part: Part) -> String {
+unsafe fn part_tooltip(part: Part) -> String {
     match part {
         Part::Han | Part::Eng | Part::ModeBadge => {
             format!("Hangul / English  ({})", app_info::SHORTCUT_TOGGLE_MODE)
         }
         Part::Wrap => format!("Word wrap  ({})", app_info::SHORTCUT_WORD_WRAP),
+        Part::Opacity => format!("Transparency  ({}%)", G_TOOLBAR.transparency),
         Part::Pin => "Always on top".to_string(),
     }
+}
+
+/// 상태에 따라 바뀌는 툴팁 문구를 다시 넣는다.
+unsafe fn update_tooltip_text(part: Part) {
+    if G_TOOLTIP_HWND == HWND(0 as _) {
+        return;
+    }
+    let text: Vec<u16> = part_tooltip(part).encode_utf16().chain(std::iter::once(0)).collect();
+    let ti = TTTOOLINFOW {
+        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+        hwnd: G_TOOLBAR_HWND,
+        uId: part as usize,
+        lpszText: PWSTR(text.as_ptr() as *mut u16),
+        ..Default::default()
+    };
+    SendMessageW(G_TOOLTIP_HWND, TTM_UPDATETIPTEXTW, WPARAM(0), LPARAM(&ti as *const _ as isize));
+}
+
+/// 투명도 버튼의 화면 좌표 (슬라이더 팝업 위치 기준).
+pub unsafe fn opacity_button_screen_rect() -> RECT {
+    if G_TOOLBAR_HWND == HWND(0 as _) {
+        return RECT::default();
+    }
+    let r = toolbar_layout(client_width(G_TOOLBAR_HWND)).opacity;
+    let mut pts = [POINT { x: r.left, y: r.top }, POINT { x: r.right, y: r.bottom }];
+    MapWindowPoints(G_TOOLBAR_HWND, None, &mut pts);
+    RECT { left: pts[0].x, top: pts[0].y, right: pts[1].x, bottom: pts[1].y }
 }
 
 unsafe fn create_toolbar_tooltips(owner: HWND, toolbar: HWND, hinstance: HINSTANCE) {
@@ -966,8 +1019,106 @@ unsafe extern "system" fn gutter_wnd_proc(
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+            let edit = G_GUTTER_EDIT;
+            if edit != HWND(0 as _) {
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let (top, line_height) = edit_line_metrics(hwnd, edit);
+                let first_visible =
+                    SendMessageW(edit, EM_GETFIRSTVISIBLELINE, WPARAM(0), LPARAM(0)).0 as i32;
+                G_GUTTER_CLICK_LINE = if y < top {
+                    -1
+                } else {
+                    first_visible + (y - top) / line_height
+                };
+                let parent = GetParent(hwnd).unwrap_or_default();
+                SendMessageW(
+                    parent,
+                    WM_COMMAND,
+                    WPARAM((BN_CLICKED as usize) << 16 | IDC_GUTTER_LINE as usize),
+                    LPARAM(hwnd.0 as isize),
+                );
+            }
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
+}
+
+/// 에디터 포맷 영역 상단 y와 행 높이 (거터 그리기·클릭 판정 공용).
+unsafe fn edit_line_metrics(gutter: HWND, edit: HWND) -> (i32, i32) {
+    let hdc = GetDC(gutter);
+    let hfont = HFONT(SendMessageW(edit, WM_GETFONT, WPARAM(0), LPARAM(0)).0 as _);
+    let old_font = if hfont != HFONT(0 as _) {
+        SelectObject(hdc, HGDIOBJ(hfont.0))
+    } else {
+        HGDIOBJ(0 as _)
+    };
+    let mut tm = TEXTMETRICW::default();
+    let _ = GetTextMetricsW(hdc, &mut tm);
+    if old_font != HGDIOBJ(0 as _) {
+        SelectObject(hdc, old_font);
+    }
+    ReleaseDC(gutter, hdc);
+
+    let mut fmt_rect = RECT::default();
+    SendMessageW(
+        edit,
+        EM_GETRECT,
+        WPARAM(0),
+        LPARAM(&mut fmt_rect as *mut _ as isize),
+    );
+    (fmt_rect.top, (tm.tmHeight + tm.tmExternalLeading).max(1))
+}
+
+/// 거터에서 클릭한 행이 속한 논리 행 전체 선택 범위 (개행은 제외해 캐럿이 그 행에 남는다).
+/// 텍스트가 없는 아래쪽 빈 영역을 클릭했으면 None.
+pub unsafe fn gutter_click_selection() -> Option<(u32, u32)> {
+    let edit = G_GUTTER_EDIT;
+    let line = G_GUTTER_CLICK_LINE;
+    if edit == HWND(0 as _) || line < 0 {
+        return None;
+    }
+    let line_count = SendMessageW(edit, EM_GETLINECOUNT, WPARAM(0), LPARAM(0)).0 as i32;
+    if line >= line_count {
+        return None;
+    }
+    let char_index = SendMessageW(edit, EM_LINEINDEX, WPARAM(line as usize), LPARAM(0)).0;
+    if char_index < 0 {
+        return None;
+    }
+    let buf = EditBuffer(edit).text_utf16();
+    let pos = (char_index as usize).min(buf.len());
+    let newline = '\n' as u16;
+    let start = buf[..pos].iter().rposition(|&c| c == newline).map_or(0, |i| i + 1);
+    let end = buf[pos..]
+        .iter()
+        .position(|&c| c == newline || c == '\r' as u16)
+        .map_or(buf.len(), |i| pos + i);
+    Some((start as u32, end as u32))
+}
+
+/// 행 번호를 숫자당 같은 폭(0~9 중 가장 넓은 글자)의 칸에 오른쪽 정렬로 그린다.
+unsafe fn draw_line_number(hdc: HDC, number: usize, right: i32, top: i32, bottom: i32, cell_w: i32) {
+    let digits: Vec<u16> = number.to_string().encode_utf16().collect();
+    let mut x = right;
+    for &d in digits.iter().rev() {
+        let mut ch = [d];
+        let mut rect = RECT { left: x - cell_w, top, right: x, bottom };
+        DrawTextW(hdc, &mut ch, &mut rect, DT_CENTER | DT_TOP | DT_SINGLELINE | DT_NOCLIP);
+        x -= cell_w;
+    }
+}
+
+unsafe fn max_digit_width(hdc: HDC) -> i32 {
+    ('0'..='9')
+        .map(|c| {
+            let mut size = SIZE::default();
+            let _ = GetTextExtentPoint32W(hdc, &[c as u16], &mut size);
+            size.cx
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 unsafe fn paint_gutter(hwnd: HWND) {
@@ -993,7 +1144,8 @@ unsafe fn paint_gutter(hwnd: HWND) {
         return;
     }
 
-    // 에디터와 같은 폰트로 행 높이를 일치시킨다
+    // 에디터와 같은 폰트로 행 높이를 일치시키고, 포맷 영역 상단 오프셋에 맞춰 시작 y를 정렬
+    let (fmt_top, line_height) = edit_line_metrics(hwnd, edit);
     let hfont = HFONT(SendMessageW(edit, WM_GETFONT, WPARAM(0), LPARAM(0)).0 as _);
     let old_font = if hfont != HFONT(0 as _) {
         SelectObject(hdc, HGDIOBJ(hfont.0))
@@ -1001,18 +1153,30 @@ unsafe fn paint_gutter(hwnd: HWND) {
         HGDIOBJ(0 as _)
     };
 
-    let mut tm = TEXTMETRICW::default();
-    let _ = GetTextMetricsW(hdc, &mut tm);
-    let line_height = (tm.tmHeight + tm.tmExternalLeading).max(1);
+    // 현재 행용 굵은 폰트 (에디터 폰트에서 굵기만 바꾼다)
+    let mut bold_font = HFONT(0 as _);
+    if hfont != HFONT(0 as _) {
+        let mut lf = LOGFONTW::default();
+        let got = GetObjectW(
+            HGDIOBJ(hfont.0),
+            std::mem::size_of::<LOGFONTW>() as i32,
+            Some(&mut lf as *mut _ as *mut _),
+        );
+        if got != 0 {
+            lf.lfWeight = FW_BOLD.0 as i32;
+            bold_font = CreateFontIndirectW(&lf);
+        }
+    }
 
-    // 에디터 포맷 영역의 상단 오프셋에 맞춰 시작 y를 정렬
-    let mut fmt_rect = RECT::default();
-    SendMessageW(
-        edit,
-        EM_GETRECT,
-        WPARAM(0),
-        LPARAM(&mut fmt_rect as *mut _ as isize),
-    );
+    // 숫자 칸 폭: 일반·굵은 폰트 모두에서 가장 넓은 숫자 기준
+    let mut cell_w = max_digit_width(hdc);
+    if bold_font != HFONT(0 as _) {
+        SelectObject(hdc, HGDIOBJ(bold_font.0));
+        cell_w = cell_w.max(max_digit_width(hdc));
+        if hfont != HFONT(0 as _) {
+            SelectObject(hdc, HGDIOBJ(hfont.0));
+        }
+    }
 
     let first_visible =
         SendMessageW(edit, EM_GETFIRSTVISIBLELINE, WPARAM(0), LPARAM(0)).0 as i32;
@@ -1068,27 +1232,35 @@ unsafe fn paint_gutter(hwnd: HWND) {
         }
 
         let line_no = newlines_before + 1;
-        // 현재 커서 행은 강조색으로 표시
-        let color = if line_no == caret_line {
-            theme().line_number_current
-        } else {
-            theme().line_number
-        };
-        let _ = SetTextColor(hdc, color);
+        // 현재 커서 행은 강조색(상단바 accent) 굵은 글씨로 표시
+        let current = line_no == caret_line;
+        let _ = SetTextColor(
+            hdc,
+            if current { theme().line_number_current } else { theme().line_number },
+        );
+        if current && bold_font != HFONT(0 as _) {
+            SelectObject(hdc, HGDIOBJ(bold_font.0));
+        }
 
-        let number = line_no.to_string();
-        let mut wide: Vec<u16> = number.encode_utf16().collect();
-        let mut rect = RECT {
-            left: 0,
-            top: fmt_rect.top + i * line_height,
-            right: client.right - px(8),
-            bottom: fmt_rect.top + (i + 1) * line_height,
-        };
-        DrawTextW(hdc, &mut wide, &mut rect, DT_RIGHT | DT_TOP | DT_SINGLELINE);
+        draw_line_number(
+            hdc,
+            line_no,
+            client.right - px(8),
+            fmt_top + i * line_height,
+            fmt_top + (i + 1) * line_height,
+            cell_w,
+        );
+
+        if current && bold_font != HFONT(0 as _) && hfont != HFONT(0 as _) {
+            SelectObject(hdc, HGDIOBJ(hfont.0));
+        }
     }
 
     if old_font != HGDIOBJ(0 as _) {
         SelectObject(hdc, old_font);
+    }
+    if bold_font != HFONT(0 as _) {
+        let _ = DeleteObject(HGDIOBJ(bold_font.0));
     }
     let _ = EndPaint(hwnd, &ps);
 }

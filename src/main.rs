@@ -14,6 +14,7 @@ mod input_controller;
 mod startup_registry;
 mod system_theme;
 mod tray_manager;
+mod window_opacity;
 
 use windows::{
     core::*,
@@ -105,24 +106,13 @@ unsafe fn commit_composition() {
     input().commit();
 }
 
-fn tray_tip(mode: InputMode) -> String {
-    let mode_label = match mode {
-        InputMode::Han => "한",
-        InputMode::Eng => "A",
-    };
-    format!("{} — {}", app_info::APP_NAME, mode_label)
-}
-
-/// 입력 모드·Wrap·항상 위 상태를 상단바와 트레이 툴팁에 반영한다.
+/// 입력 모드·Wrap·항상 위·투명도 상태를 상단바에 반영한다.
 unsafe fn sync_toolbar() {
     let mode = input().mode();
-    let (wrap, topmost) = G_CONFIG
+    let (wrap, topmost, transparency) = G_CONFIG
         .as_ref()
-        .map_or((true, false), |c| (c.word_wrap, c.always_on_top));
-    editor_window::toolbar_set_state(mode == InputMode::Han, wrap, topmost);
-    if let Some(nid) = G_NOTIFY_ICON_DATA.as_mut() {
-        tray_manager::set_tray_tip(nid, &tray_tip(mode));
-    }
+        .map_or((true, false, 0), |c| (c.word_wrap, c.always_on_top, c.transparency));
+    editor_window::toolbar_set_state(mode == InputMode::Han, wrap, topmost, transparency);
 }
 
 unsafe fn get_edit_text(hwnd: HWND) -> String {
@@ -350,6 +340,7 @@ unsafe fn apply_theme(hwnd: HWND) {
     }
     editor_window::apply_control_theme(G_HWND_EDIT);
     editor_window::refresh_toolbar_theme();
+    window_opacity::refresh_slider_theme();
     system_theme::flush_menu_themes();
     let _ = RedrawWindow(
         hwnd,
@@ -540,7 +531,7 @@ unsafe fn run() {
     G_NOTIFY_ICON_DATA = Some(tray_manager::register_tray_icon(
         hwnd,
         hinstance,
-        &tray_tip(input().mode()),
+        app_info::APP_NAME,
     ));
 
     // 최초 실행 시에도 바로 입력할 수 있게 창을 띄운다
@@ -552,6 +543,9 @@ unsafe fn run() {
 
     let mut msg = MSG::default();
     while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        if window_opacity::pre_translate(&msg) {
+            continue;
+        }
         // F1(한/영 전환)은 포커스 위치와 상관없이 여기서 한 번만 처리한다
         if msg.message == WM_KEYDOWN && msg.wParam.0 as u32 == VK_F1 {
             toggle_input_mode_and_focus_editor();
@@ -598,6 +592,24 @@ unsafe fn toggle_always_on_top(hwnd: HWND) {
     config_store::save(cfg);
     editor_window::apply_always_on_top(hwnd, cfg.always_on_top);
     sync_toolbar();
+}
+
+/// 투명도(%)를 바꾼다. 슬라이더를 끄는 동안에는 `save` 없이 미리보기만 한다.
+unsafe fn set_transparency(hwnd: HWND, transparency: u8, save: bool) {
+    let Some(cfg) = G_CONFIG.as_mut() else {
+        return;
+    };
+    let transparency = transparency.min(config_store::MAX_TRANSPARENCY);
+    cfg.transparency = transparency;
+    if save {
+        config_store::save(cfg);
+    }
+    window_opacity::apply(hwnd, transparency);
+    sync_toolbar();
+}
+
+unsafe fn on_slider_change(transparency: u8, commit: bool) {
+    set_transparency(G_HWND_MAIN, transparency, commit);
 }
 
 unsafe fn toggle_start_with_windows() {
@@ -709,6 +721,7 @@ unsafe extern "system" fn wnd_proc(
                 if cfg.always_on_top {
                     editor_window::apply_always_on_top(hwnd, true);
                 }
+                window_opacity::apply(hwnd, cfg.transparency);
             }
 
             apply_font_to_edit(G_HWND_EDIT);
@@ -787,10 +800,30 @@ unsafe extern "system" fn wnd_proc(
                         focus_editor();
                     }
                 }
+                editor_window::IDC_OPACITY_BUTTON => {
+                    if notif == BN_CLICKED as u16 {
+                        let current = G_CONFIG.as_ref().map_or(0, |c| c.transparency);
+                        window_opacity::toggle_slider(
+                            hwnd,
+                            editor_window::opacity_button_screen_rect(),
+                            current,
+                            on_slider_change,
+                        );
+                    }
+                }
                 editor_window::IDC_WORD_WRAP_CHECK => {
                     if notif == BN_CLICKED as u16 {
                         toggle_word_wrap(hwnd);
                     }
+                }
+                editor_window::IDC_GUTTER_LINE => {
+                    // 행 번호 클릭: 조합을 확정한 뒤 그 논리 행 전체를 선택
+                    commit_composition();
+                    if let Some((start, end)) = editor_window::gutter_click_selection() {
+                        set_selection(G_HWND_EDIT, start, end);
+                    }
+                    focus_editor();
+                    editor_window::invalidate_gutter();
                 }
                 IDM_TOGGLE_WINDOW => {
                     if IsWindowVisible(hwnd).as_bool() {
