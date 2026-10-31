@@ -1,5 +1,5 @@
 // 창 투명도 모듈
-// 레이어드 창 알파, 창 뒤 화면 밝기 측정(자동 라이트/다크), 투명도 슬라이더 팝업
+// 레이어드 창 알파, 투명도 슬라이더 팝업
 
 use windows::{
     core::*,
@@ -50,88 +50,6 @@ pub unsafe fn apply(hwnd: HWND, transparency: u8) {
 fn alpha_for(transparency: u8) -> u8 {
     let t = transparency.min(MAX_TRANSPARENCY) as u32;
     (255 * (100 - t) / 100) as u8
-}
-
-// ---------- 창 뒤 밝기 ----------
-
-const SAMPLE_SIZE: i32 = 16;
-// 히스테리시스: 경계 밝기에서 라이트/다크가 번갈아 바뀌지 않도록 두 기준을 둔다
-const DARK_BELOW: f32 = 0.40;
-const LIGHT_ABOVE: f32 = 0.60;
-
-/// 창이 덮고 있는 화면 영역의 평균 밝기(0~1).
-/// CAPTUREBLT 없이 화면을 복사하면 레이어드 창(투명 상태의 이 창)은 빠지고 그 뒤 화면만 잡힌다.
-pub unsafe fn sample_backdrop_luminance(hwnd: HWND) -> Option<f32> {
-    let mut rc = RECT::default();
-    GetWindowRect(hwnd, &mut rc).ok()?;
-    let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
-    if w <= 0 || h <= 0 {
-        return None;
-    }
-
-    let screen = GetDC(None);
-    let mem = CreateCompatibleDC(screen);
-    let bmi = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: SAMPLE_SIZE,
-            biHeight: -SAMPLE_SIZE,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-    let result = match CreateDIBSection(mem, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
-        Ok(dib) if !bits.is_null() => {
-            let old = SelectObject(mem, HGDIOBJ(dib.0));
-            SetStretchBltMode(mem, HALFTONE);
-            let copied = StretchBlt(
-                mem, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE, screen, rc.left, rc.top, w, h, SRCCOPY,
-            )
-            .as_bool();
-            let _ = GdiFlush();
-            let lum = copied.then(|| {
-                let n = (SAMPLE_SIZE * SAMPLE_SIZE) as usize;
-                average_luminance(std::slice::from_raw_parts(bits as *const u32, n))
-            });
-            SelectObject(mem, old);
-            let _ = DeleteObject(HGDIOBJ(dib.0));
-            lum
-        }
-        _ => None,
-    };
-    let _ = DeleteDC(mem);
-    ReleaseDC(None, screen);
-    result
-}
-
-/// 32bpp DIB 픽셀(0x00RRGGBB)의 평균 밝기.
-fn average_luminance(pixels: &[u32]) -> f32 {
-    if pixels.is_empty() {
-        return 0.5;
-    }
-    let sum: f32 = pixels
-        .iter()
-        .map(|&p| {
-            let r = ((p >> 16) & 0xFF) as f32;
-            let g = ((p >> 8) & 0xFF) as f32;
-            let b = (p & 0xFF) as f32;
-            (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
-        })
-        .sum();
-    sum / pixels.len() as f32
-}
-
-/// 창 뒤 밝기로 다크 팔레트를 쓸지 정한다. 뒤가 어두우면 다크(밝은 글자), 밝으면 라이트.
-pub fn decide_dark(current_dark: bool, luminance: f32) -> bool {
-    if current_dark {
-        luminance < LIGHT_ABOVE
-    } else {
-        luminance < DARK_BELOW
-    }
 }
 
 // ---------- 슬라이더 팝업 ----------
@@ -283,7 +201,7 @@ pub unsafe fn pre_translate(msg: &MSG) -> bool {
     true
 }
 
-/// 테마(자동 라이트/다크 포함)가 바뀌면 열린 팝업도 다시 칠한다.
+/// 테마가 바뀌면 열린 팝업도 다시 칠한다.
 pub unsafe fn refresh_slider_theme() {
     if let Some(popup) = G_POPUP.as_ref() {
         editor_window::apply_control_theme(popup.trackbar);
@@ -405,23 +323,5 @@ mod tests {
         assert_eq!(alpha_for(50), 127);
         assert_eq!(alpha_for(80), 51);
         assert_eq!(alpha_for(100), alpha_for(MAX_TRANSPARENCY));
-    }
-
-    #[test]
-    fn test_average_luminance() {
-        assert_eq!(average_luminance(&[0x00FF_FFFF; 4]), 1.0);
-        assert_eq!(average_luminance(&[0x0000_0000; 4]), 0.0);
-        let half = average_luminance(&[0x00FF_FFFF, 0x0000_0000]);
-        assert!((half - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_decide_dark_hysteresis() {
-        // 라이트 상태: 충분히 어두워야 다크로
-        assert!(!decide_dark(false, 0.5));
-        assert!(decide_dark(false, 0.3));
-        // 다크 상태: 충분히 밝아야 라이트로
-        assert!(decide_dark(true, 0.5));
-        assert!(!decide_dark(true, 0.7));
     }
 }

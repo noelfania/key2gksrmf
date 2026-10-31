@@ -58,9 +58,6 @@ const DWMWA_USE_IMMERSIVE_DARK_MODE: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(20)
 const HOTKEY_ID_OPEN: i32 = 1;
 // 트레이 클릭 직전까지 창이 활성 상태였다고 볼 시간 (ms)
 const TRAY_TOGGLE_ACTIVE_WINDOW_MS: u32 = 500;
-// 투명할 때 창 뒤 밝기를 재는 타이머
-const TIMER_ID_BACKDROP: usize = 1;
-const BACKDROP_SAMPLE_MS: u32 = 700;
 
 // 전역 상태 (Win32 콜백에서 접근하기 위해 전역으로 관리)
 static mut G_HWND_MAIN: HWND = HWND(0 as _);
@@ -78,8 +75,6 @@ static mut G_WM_TASKBAR_CREATED: u32 = 0;
 // 트레이 클릭 토글 판정용 시각 (GetTickCount)
 static mut G_LAST_DEACTIVATE_TICK: u32 = 0;
 static mut G_LAST_TRAY_SHOW_TICK: u32 = 0;
-// 투명할 때 창 뒤 밝기로 고른 팔레트 (None이면 Windows 테마를 따른다)
-static mut G_BACKDROP_DARK: Option<bool> = None;
 
 // 물리키 기반 조합 상태 (모드·조합 추적·WM_CHAR 억제)
 static mut G_INPUT: Option<InputController> = None;
@@ -331,9 +326,9 @@ unsafe fn apply_window_icons(hwnd: HWND) {
     }
 }
 
-/// Windows 라이트/다크(투명할 때는 창 뒤 밝기)·강조색에 맞춰 창 전체를 다시 칠한다.
+/// Windows 라이트/다크·강조색에 맞춰 창 전체를 다시 칠한다.
 unsafe fn apply_theme(hwnd: HWND) {
-    let dark = effective_dark();
+    let dark = !system_theme::apps_are_light();
     if let Some(cfg) = G_CONFIG.as_ref() {
         editor_window::init_theme(cfg, dark, system_theme::control_accent_color(dark));
     }
@@ -610,43 +605,11 @@ unsafe fn set_transparency(hwnd: HWND, transparency: u8, save: bool) {
         config_store::save(cfg);
     }
     window_opacity::apply(hwnd, transparency);
-    update_backdrop_tracking(hwnd, IsWindowVisible(hwnd).as_bool());
     sync_toolbar();
 }
 
 unsafe fn on_slider_change(transparency: u8, commit: bool) {
     set_transparency(G_HWND_MAIN, transparency, commit);
-}
-
-/// 투명하고 보이는 동안만 창 뒤 밝기를 주기적으로 잰다. 불투명해지면 Windows 테마로 돌아간다.
-unsafe fn update_backdrop_tracking(hwnd: HWND, visible: bool) {
-    let transparent = G_CONFIG.as_ref().is_some_and(|c| c.transparency > 0);
-    if transparent && visible {
-        SetTimer(hwnd, TIMER_ID_BACKDROP, BACKDROP_SAMPLE_MS, None);
-        sample_backdrop(hwnd);
-    } else {
-        let _ = KillTimer(hwnd, TIMER_ID_BACKDROP);
-        if !transparent && G_BACKDROP_DARK.take().is_some() {
-            apply_theme(hwnd);
-        }
-    }
-}
-
-unsafe fn sample_backdrop(hwnd: HWND) {
-    let Some(luminance) = window_opacity::sample_backdrop_luminance(hwnd) else {
-        return;
-    };
-    let current = effective_dark();
-    let dark = window_opacity::decide_dark(current, luminance);
-    G_BACKDROP_DARK = Some(dark);
-    if dark != current {
-        apply_theme(hwnd);
-    }
-}
-
-/// 투명하면 창 뒤 밝기로 고른 팔레트, 아니면 Windows 앱 테마.
-unsafe fn effective_dark() -> bool {
-    G_BACKDROP_DARK.unwrap_or_else(|| !system_theme::apps_are_light())
 }
 
 unsafe fn toggle_start_with_windows() {
@@ -919,26 +882,6 @@ unsafe extern "system" fn wnd_proc(
             } else {
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
-        }
-
-        WM_SHOWWINDOW => {
-            // 보이기 직전에 재 두면 처음 뜰 때 팔레트가 바뀌며 깜빡이지 않는다
-            update_backdrop_tracking(hwnd, wparam.0 != 0);
-            DefWindowProcW(hwnd, msg, wparam, lparam)
-        }
-
-        WM_TIMER => {
-            if wparam.0 == TIMER_ID_BACKDROP {
-                sample_backdrop(hwnd);
-            }
-            LRESULT(0)
-        }
-
-        WM_EXITSIZEMOVE => {
-            if G_CONFIG.as_ref().is_some_and(|c| c.transparency > 0) {
-                sample_backdrop(hwnd);
-            }
-            LRESULT(0)
         }
 
         WM_SETTINGCHANGE => {
