@@ -162,47 +162,7 @@ export default function App() {
             <h1>key2gksrmf</h1>
             <span class="hero-subtitle">Type Hangul with physical keys</span>
           </div>
-
-          <nav class="hero-links" aria-label="Project links">
-            <a
-              class="release-button pages-button"
-              href="https://github.com/noelfania/key2gksrmf"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              View on GitHub
-            </a>
-            <a
-              class="release-button"
-              href="https://github.com/noelfania/key2gksrmf/releases"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Download Windows App
-            </a>
-          </nav>
         </div>
-
-        <section class="seo-intro" aria-labelledby="seo-en-title">
-          <h2 id="seo-en-title" class="seo-heading">
-            Hangul keyboard online — no Korean IME required
-          </h2>
-          <p>
-            Type Korean Hangul using your QWERTY keyboard with 2-set (dubeolsik) layout
-            mapping. Example: <code>gksrmf</code> → <strong>한글</strong>. Useful when a
-            Korean keyboard layout is not installed. Press <kbd>F1</kbd> to switch Hangul /
-            English mode.
-          </p>
-          <h2 class="seo-heading" lang="ko">
-            한글 자판·IME 없이 두벌식 한글 입력
-          </h2>
-          <p lang="ko">
-            영문 키보드 물리키로 두벌식 한글을 바로 입력할 수 있는 웹 데모입니다. 한국어
-            키보드 레이아웃이 없는 Windows·브라우저 환경에서도 <code>gksrmf</code> →{" "}
-            <strong>한글</strong>처럼 입력할 수 있습니다. <kbd>F1</kbd> 또는 ㅎ/A로 한/영을
-            전환하세요. Windows용 포터블 앱은 Releases에서 다운로드할 수 있습니다.
-          </p>
-        </section>
       </header>
 
       <section class="editor-card" aria-label="Hangul text editor">
@@ -255,12 +215,25 @@ export default function App() {
         />
       </section>
 
-      <footer class="seo-footer">
-        <p>
-          <strong>key2gksrmf</strong> — open-source Hangul input helper for Windows and the
-          web. Keywords: Hangul keyboard, Korean typing without IME, dubeolsik, 두벌식 한글
-          입력, 영타 한글 변환.
-        </p>
+      <footer class="page-footer">
+        <nav class="hero-links" aria-label="Project links">
+          <a
+            class="release-button pages-button"
+            href="https://github.com/noelfania/key2gksrmf"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View on GitHub
+          </a>
+          <a
+            class="release-button"
+            href="https://github.com/noelfania/key2gksrmf/releases"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Download Windows App
+          </a>
+        </nav>
       </footer>
     </main>
   );

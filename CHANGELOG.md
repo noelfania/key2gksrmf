@@ -6,6 +6,10 @@ key2gksrmf의 버전별 변경 내역입니다. 형식은 [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- 웹 데모에서 상단 설명과 SEO 문구를 제거하고 GitHub·Windows 앱 링크를 footer로 이동했다.
+
 ## [0.3.0] - 2026-10-31
 
 ### Added
